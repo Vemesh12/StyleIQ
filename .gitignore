@@ -30,10 +30,14 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files
 .env*
+!.env.example
 
-# vercel
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
 .vercel
 
 # typescript

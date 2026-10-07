@@ -1,0 +1,463 @@
+// Prisma schema for StyleIQ - Men's Fashion Knowledge Platform
+// Database: PostgreSQL (via pgAdmin)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// REFERENCE / LOOKUP TABLES
+// ============================================================
+
+model GarmentType {
+  id       String    @id @default(cuid())
+  name     String    @unique // 'Shirt', 'Trouser', 'Shoe', etc.
+  slug     String    @unique
+  garments Garment[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("garment_types")
+}
+
+model Color {
+  id        String  @id @default(cuid())
+  name      String  @unique // 'Navy Blue'
+  hex       String  // '#1B2A4A'
+  slug      String  @unique
+  family    String  // 'Blue', 'Red', 'Neutral'
+  isNeutral Boolean @default(false)
+
+  garmentColors          GarmentColor[]
+  colorCompatibilityA    ColorCompatibilityRule[] @relation("ColorA")
+  colorCompatibilityB    ColorCompatibilityRule[] @relation("ColorB")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("colors")
+}
+
+model Fit {
+  id   String @id @default(cuid())
+  name String @unique // 'Slim Fit'
+  slug String @unique
+
+  garmentFits GarmentFit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("fits")
+}
+
+model Material {
+  id            String @id @default(cuid())
+  name          String @unique // 'Egyptian Cotton'
+  slug          String @unique
+  breathability Int    @default(3) // 1-5
+  formality     Int    @default(3) // 1-5
+
+  garmentMaterials GarmentMaterial[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("materials")
+}
+
+model Pattern {
+  id       String  @id @default(cuid())
+  name     String  @unique // 'Solid', 'Striped'
+  slug     String  @unique
+  isFormal Boolean @default(false)
+
+  garmentPatterns GarmentPattern[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("patterns")
+}
+
+model Occasion {
+  id             String @id @default(cuid())
+  name           String @unique // 'Business Formal'
+  slug           String @unique
+  formalityLevel Int    // 1-5
+  description    String @default("")
+
+  garmentOccasions GarmentOccasion[]
+  ruleOccasions    RuleOccasion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("occasions")
+}
+
+model Season {
+  id   String @id @default(cuid())
+  name String @unique // 'Summer'
+  slug String @unique
+
+  garmentSeasons GarmentSeason[]
+  ruleSeasons    RuleSeason[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("seasons")
+}
+
+model BodyType {
+  id          String @id @default(cuid())
+  name        String @unique // 'Athletic'
+  slug        String @unique
+  description String @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("body_types")
+}
+
+model SkinTone {
+  id          String @id @default(cuid())
+  name        String @unique // 'Wheatish'
+  slug        String @unique
+  description String @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("skin_tones")
+}
+
+// ============================================================
+// GARMENTS MASTER TABLE
+// ============================================================
+
+model Garment {
+  id             String      @id @default(cuid())
+  name           String      // 'Oxford Button-Down Shirt'
+  slug           String      @unique
+  garmentType    GarmentType @relation(fields: [garmentTypeId], references: [id])
+  garmentTypeId  String
+  description    String      @default("")
+  formalityLevel Int         @default(3) // 1=Ultra Casual, 5=Black Tie
+  imageUrl       String      @default("")
+
+  // Multi-dimensional attributes (junction tables)
+  colors    GarmentColor[]
+  fits      GarmentFit[]
+  materials GarmentMaterial[]
+  patterns  GarmentPattern[]
+  occasions GarmentOccasion[]
+  seasons   GarmentSeason[]
+
+  // Compatibility rules
+  compatibilityAsA CompatibilityRule[] @relation("GarmentA")
+  compatibilityAsB CompatibilityRule[] @relation("GarmentB")
+
+  digitalWardrobes DigitalWardrobe[]
+  savedOutfitItems SavedOutfitItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("garments")
+}
+
+// ============================================================
+// GARMENT JUNCTION TABLES (many-to-many with properties)
+// ============================================================
+
+model GarmentColor {
+  id        String  @id @default(cuid())
+  garment   Garment @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId String
+  color     Color   @relation(fields: [colorId], references: [id], onDelete: Cascade)
+  colorId   String
+  isPrimary Boolean @default(false)
+
+  @@unique([garmentId, colorId])
+  @@map("garment_colors")
+}
+
+model GarmentFit {
+  id        String  @id @default(cuid())
+  garment   Garment @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId String
+  fit       Fit     @relation(fields: [fitId], references: [id], onDelete: Cascade)
+  fitId     String
+  isPrimary Boolean @default(false)
+
+  @@unique([garmentId, fitId])
+  @@map("garment_fits")
+}
+
+model GarmentMaterial {
+  id         String   @id @default(cuid())
+  garment    Garment  @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId  String
+  material   Material @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  materialId String
+  percentage Int      @default(100)
+
+  @@unique([garmentId, materialId])
+  @@map("garment_materials")
+}
+
+model GarmentPattern {
+  id        String  @id @default(cuid())
+  garment   Garment @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId String
+  pattern   Pattern @relation(fields: [patternId], references: [id], onDelete: Cascade)
+  patternId String
+  isPrimary Boolean @default(false)
+
+  @@unique([garmentId, patternId])
+  @@map("garment_patterns")
+}
+
+model GarmentOccasion {
+  id          String   @id @default(cuid())
+  garment     Garment  @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId   String
+  occasion    Occasion @relation(fields: [occasionId], references: [id], onDelete: Cascade)
+  occasionId  String
+  suitability Int      @default(3) // 1-5
+
+  @@unique([garmentId, occasionId])
+  @@map("garment_occasions")
+}
+
+model GarmentSeason {
+  id          String  @id @default(cuid())
+  garment     Garment @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId   String
+  season      Season  @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  seasonId    String
+  suitability Int     @default(3) // 1-5
+
+  @@unique([garmentId, seasonId])
+  @@map("garment_seasons")
+}
+
+// ============================================================
+// COMPATIBILITY RULES — The Core of the System
+// ============================================================
+
+model CompatibilityRule {
+  id                String @id @default(cuid())
+  garmentA          Garment @relation("GarmentA", fields: [garmentAId], references: [id], onDelete: Cascade)
+  garmentAId        String
+  garmentB          Garment @relation("GarmentB", fields: [garmentBId], references: [id], onDelete: Cascade)
+  garmentBId        String
+  rating            Float   // 1.0 to 5.0
+  reason            String  @default("")
+  compatibilityType String  @default("good") // 'excellent', 'good', 'acceptable', 'avoid'
+
+  occasions RuleOccasion[]
+  seasons   RuleSeason[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([garmentAId, garmentBId])
+  @@map("compatibility_rules")
+}
+
+model RuleOccasion {
+  id         String            @id @default(cuid())
+  rule       CompatibilityRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  ruleId     String
+  occasion   Occasion          @relation(fields: [occasionId], references: [id], onDelete: Cascade)
+  occasionId String
+
+  @@unique([ruleId, occasionId])
+  @@map("rule_occasions")
+}
+
+model RuleSeason {
+  id       String            @id @default(cuid())
+  rule     CompatibilityRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  ruleId   String
+  season   Season            @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  seasonId String
+
+  @@unique([ruleId, seasonId])
+  @@map("rule_seasons")
+}
+
+// ============================================================
+// COLOR COMPATIBILITY RULES
+// ============================================================
+
+model ColorCompatibilityRule {
+  id       String @id @default(cuid())
+  colorA   Color  @relation("ColorA", fields: [colorAId], references: [id], onDelete: Cascade)
+  colorAId String
+  colorB   Color  @relation("ColorB", fields: [colorBId], references: [id], onDelete: Cascade)
+  colorBId String
+  harmony  String // 'excellent', 'good', 'acceptable', 'avoid'
+  score    Int    // 0-10
+  ruleType String @default("neutral") // 'complementary', 'analogous', 'neutral', 'monochrome', 'contrast'
+  reason   String @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([colorAId, colorBId])
+  @@map("color_compatibility_rules")
+}
+
+// ============================================================
+// CONTENT TABLES
+// ============================================================
+
+model Guide {
+  id          String  @id @default(cuid())
+  title       String  // 'The Complete Business Casual Guide'
+  slug        String  @unique
+  category    String  @default("style") // 'occasion', 'style', 'body', 'season', 'accessory'
+  content     String  @default("") // Rich text / MDX content
+  excerpt     String  @default("")
+  seoTitle    String  @default("")
+  seoDesc     String  @default("")
+  published   Boolean @default(false)
+  imageUrl    String  @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("guides")
+}
+
+model StyleRule {
+  id          String @id @default(cuid())
+  title       String // 'Never mix brown belt with black shoes'
+  ruleType    String @default("dos") // 'dos', 'donts', 'pro-tip'
+  explanation String @default("")
+  category    String @default("general") // 'color', 'fit', 'occasion', 'accessory', 'general'
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("style_rules")
+}
+
+// ============================================================
+// ADMIN TABLE
+// ============================================================
+
+model AdminUser {
+  id       String @id @default(cuid())
+  email    String @unique
+  password String // hashed
+  name     String @default("")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("admin_users")
+}
+
+// ============================================================
+// PERSONALIZATION ENGINE RULES (from recommendations.csv)
+// ============================================================
+
+model PersonalizationRule {
+  id                                 String @id @default(cuid())
+  hairColor                          String
+  eyeColor                           String
+  skinTone                           String
+  underTone                          String
+  torsoLength                        String
+  bodyProportion                     String
+  recommendedClothingColors          String
+  avoidClothingColors                String
+  recommendedFittingStyle            String
+  recommendedMaterials               String
+  recommendedPatterns                String
+  recommendedJewelryMetal            String
+  recommendedShoes                   String
+  recommendedClothingColorWheelRegion String
+  avoidClothingColorWheelRegion      String
+  fabricNature                       String
+  dontExaggerate                     String
+  doExaggerate                       String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([skinTone, underTone, torsoLength, bodyProportion])
+  @@map("personalization_rules")
+}
+
+// ============================================================
+// USER ACCOUNTS & DIGITAL WARDROBE
+// ============================================================
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String   // hashed
+  name      String   @default("")
+  
+  wardrobe     DigitalWardrobe[]
+  savedOutfits SavedOutfit[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model DigitalWardrobe {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  garment   Garment  @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId String
+  quantity  Int      @default(1)
+
+  addedAt   DateTime @default(now())
+
+  @@unique([userId, garmentId])
+  @@map("digital_wardrobe")
+}
+
+model SavedOutfit {
+  id          String            @id @default(cuid())
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  name        String            @default("My Saved Outfit")
+  outfitScore Int               @default(80)
+  items       SavedOutfitItem[]
+
+  createdAt   DateTime          @default(now())
+
+  @@map("saved_outfits")
+}
+
+model SavedOutfitItem {
+  id          String      @id @default(cuid())
+  outfit      SavedOutfit @relation(fields: [outfitId], references: [id], onDelete: Cascade)
+  outfitId    String
+  garment     Garment     @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId   String
+  layerOrder  Int         @default(1)
+
+  @@unique([outfitId, garmentId])
+  @@map("saved_outfit_items")
+}
+
+

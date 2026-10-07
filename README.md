@@ -1,36 +1,91 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# StyleIQ — Men's Fashion Knowledge Platform
 
-## Getting Started
+A men's outfit-compatibility and style-recommendation platform built with Next.js
+(App Router), Prisma, and PostgreSQL. It includes a color-harmony/garment
+compatibility rule engine, an outfit builder that scores looks out of 100, a
+personalization engine driven by a hair/eye/skin-tone dataset, a digital
+wardrobe, and an admin panel for managing garments and compatibility rules.
 
-First, run the development server:
+## Prerequisites
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- Node.js 20+
+- A PostgreSQL database (local or hosted)
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Setup
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Install dependencies:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+   ```bash
+   npm install
+   ```
 
-## Learn More
+2. Copy the environment template and fill in the values:
 
-To learn more about Next.js, take a look at the following resources:
+   ```bash
+   cp .env.example .env
+   ```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+   Required variables:
+   - `DATABASE_URL` — PostgreSQL connection string.
+   - `JWT_SECRET` — secret used to sign session tokens. The app will refuse to
+     start without this set. Generate one with `openssl rand -base64 32`.
+   - `NEXT_PUBLIC_APP_URL` — public base URL (defaults to `http://localhost:3000`).
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+3. Apply the Prisma schema to your database:
 
-## Deploy on Vercel
+   ```bash
+   npx prisma migrate dev
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+4. Seed the database. Run these **in order** — each builds on the last:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   ```bash
+   npx prisma db seed      # base catalog: garment types, ~30 colors, admin user, compatibility rules
+   npm run seed:colors     # adds the expanded ~245-color palette
+   npm run seed:catalog    # adds new garment types (T-Shirt, Polo, Sweater, ...) + real
+                           # fit/material/pattern/occasion/season data across the whole catalog
+   npm run seed:rules      # expands curated CompatibilityRule / ColorCompatibilityRule coverage
+   npx tsx prisma/seed-csv.ts   # personalization dataset (hair/eye/skin-tone recommendations)
+   ```
+
+   (`npm run seed:all` runs the first four in sequence.) All five scripts are
+   idempotent (upsert/skip-duplicates keyed by slug), so re-running any of
+   them is safe.
+
+   `prisma/seed-csv.ts` reads `recommendations.csv` from the repo root (one
+   level above this `styleiq/` folder) by default. Set
+   `RECOMMENDATIONS_CSV_PATH` in `.env` to point elsewhere if needed.
+
+   The default seeded admin login is `admin@styleiq.com` / `admin123` — this
+   is a local-dev convenience only. **Change this password (or the seeded
+   email) before deploying anywhere reachable by others** — the seed script
+   does not warn or prompt about this.
+
+5. Run the dev server:
+
+   ```bash
+   npm run dev
+   ```
+
+   Open [http://localhost:3000](http://localhost:3000).
+
+## Scripts
+
+- `npm run dev` — start the dev server
+- `npm run build` — production build
+- `npm run start` — run the production build
+- `npm run lint` — run ESLint
+
+## Project structure
+
+- `src/app/` — App Router pages and API routes (`src/app/api/**`)
+- `src/lib/rule-engine/` — color-harmony and garment-compatibility scoring logic
+- `src/lib/auth.ts` — admin/user session (JWT) helpers
+- `src/lib/validation.ts` — zod request-validation schemas for API routes
+- `prisma/schema.prisma` — data model
+- `prisma/seed.ts` / `prisma/seed-colors.ts` / `prisma/seed-catalog-v2.ts` / `prisma/seed-rules-expansion.ts` / `prisma/seed-csv.ts` — database seed scripts (see setup steps above for run order)
+
+## Notes
+
+- There is currently no automated test suite for this project.
+- All application code lives under `styleiq/`, which is its own git repository.
