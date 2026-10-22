@@ -1,10 +1,14 @@
 import { MetadataRoute } from 'next';
 import { prisma } from '@/lib/prisma';
 
+// Rebuilt hourly so new garments and guides appear without a redeploy
+// (it was prerendered once at build time and never refreshed).
+export const revalidate = 3600;
+
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
-  const garments = await prisma.garment.findMany({ select: { slug: true, updatedAt: true } });
+  const garments = await prisma.garment.findMany({ where: { ownerId: null }, select: { slug: true, updatedAt: true } });
   const guides = await prisma.guide.findMany({
     where: { published: true },
     select: { slug: true, updatedAt: true },
@@ -23,7 +27,6 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   return [
     { url: `${baseUrl}`, lastModified: new Date() },
     { url: `${baseUrl}/quick-pick`, lastModified: new Date() },
-    { url: `${baseUrl}/wardrobe`, lastModified: new Date() },
     { url: `${baseUrl}/style-advisor`, lastModified: new Date() },
     { url: `${baseUrl}/encyclopedia`, lastModified: new Date() },
     { url: `${baseUrl}/outfit-builder`, lastModified: new Date() },

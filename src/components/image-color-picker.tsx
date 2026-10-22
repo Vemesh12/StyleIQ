@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { GarmentIllustration } from '@/components/garment-illustration';
 import Link from 'next/link';
+import { dominantColorsFromPixels, toHex } from '@/lib/color-extract';
 import {
   Camera,
   Upload,
@@ -15,7 +16,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   ArrowRight,
-  Eye,
   X,
 } from 'lucide-react';
 
@@ -79,14 +79,30 @@ const PRESET_SWATCHES = [
   { name: 'Sky Blue Oxford', hex: '#87CEEB', category: 'shirt' },
 ];
 
+const DEFAULT_HEX = '#1B2A4A';
+
+async function fetchColorMatch(hex: string): Promise<MatchResponse | null> {
+  try {
+    const res = await fetch('/api/colors/match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hex }),
+    });
+    return res.ok ? await res.json() : null;
+  } catch (err) {
+    console.error('Failed to match color:', err);
+    return null;
+  }
+}
+
 export function ImageColorPicker() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [selectedHex, setSelectedHex] = useState<string>('#1B2A4A');
+  const [selectedHex, setSelectedHex] = useState<string>(DEFAULT_HEX);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
-  const [analyzing, setAnalyzing] = useState<boolean>(false);
+  // True on mount: the default swatch is analyzed right away.
+  const [analyzing, setAnalyzing] = useState<boolean>(true);
   const [matchData, setMatchData] = useState<MatchResponse | null>(null);
   const [dominantColors, setDominantColors] = useState<string[]>([]);
-  const [hoverHex, setHoverHex] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -97,27 +113,23 @@ export function ImageColorPicker() {
   const analyzeColor = useCallback(async (hex: string) => {
     setSelectedHex(hex);
     setAnalyzing(true);
-    try {
-      const res = await fetch('/api/colors/match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hex }),
-      });
-      if (res.ok) {
-        const data: MatchResponse = await res.json();
-        setMatchData(data);
-      }
-    } catch (err) {
-      console.error('Failed to match color:', err);
-    } finally {
-      setAnalyzing(false);
-    }
+    const data = await fetchColorMatch(hex);
+    if (data) setMatchData(data);
+    setAnalyzing(false);
   }, []);
 
-  // Initial analysis on mount
+  // Initial analysis of the default swatch on mount
   useEffect(() => {
-    analyzeColor('#1B2A4A');
-  }, [analyzeColor]);
+    let active = true;
+    fetchColorMatch(DEFAULT_HEX).then((data) => {
+      if (!active) return;
+      if (data) setMatchData(data);
+      setAnalyzing(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Handle file upload
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -185,11 +197,11 @@ export function ImageColorPicker() {
     img.crossOrigin = 'anonymous';
     img.onload = () => {
       const canvas = canvasRef.current || document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
       if (!ctx) return;
 
-      const maxDim = 150;
-      const scale = Math.min(maxDim / img.width, maxDim / img.height);
+      const maxDim = 160;
+      const scale = Math.min(1, maxDim / img.width, maxDim / img.height);
       const w = Math.max(1, Math.floor(img.width * scale));
       const h = Math.max(1, Math.floor(img.height * scale));
 
@@ -198,34 +210,7 @@ export function ImageColorPicker() {
       ctx.drawImage(img, 0, 0, w, h);
 
       try {
-        const imgData = ctx.getImageData(0, 0, w, h).data;
-        const colorBuckets: { [hex: string]: number } = {};
-
-        for (let i = 0; i < imgData.length; i += 16) {
-          const r = imgData[i];
-          const g = imgData[i + 1];
-          const b = imgData[i + 2];
-          const a = imgData[i + 3];
-
-          if (a < 128) continue;
-          // Filter out pure black / pure white edge artifacts
-          const brightness = (r * 299 + g * 587 + b * 114) / 1000;
-          if (brightness < 15 || brightness > 245) continue;
-
-          // Quantize to reduce noise
-          const qr = Math.round(r / 16) * 16;
-          const qg = Math.round(g / 16) * 16;
-          const qb = Math.round(b / 16) * 16;
-          const hex = `#${((1 << 24) + (qr << 16) + (qg << 8) + qb).toString(16).slice(1)}`;
-
-          colorBuckets[hex] = (colorBuckets[hex] || 0) + 1;
-        }
-
-        const sorted = Object.entries(colorBuckets)
-          .sort((a, b) => b[1] - a[1])
-          .map(([hex]) => hex)
-          .slice(0, 5);
-
+        const sorted = dominantColorsFromPixels(ctx.getImageData(0, 0, w, h).data, w, h);
         if (sorted.length > 0) {
           setDominantColors(sorted);
           analyzeColor(sorted[0]);
@@ -237,7 +222,8 @@ export function ImageColorPicker() {
     img.src = src;
   };
 
-  // Eyedropper click on image
+  // Eyedropper click on image — averages a small 5x5 area so one noisy pixel
+  // (a highlight, a thread, JPEG artefacts) doesn't decide the color.
   const handleImageClick = (e: React.MouseEvent<HTMLImageElement>) => {
     if (!previewImgRef.current) return;
     const img = previewImgRef.current;
@@ -248,13 +234,26 @@ export function ImageColorPicker() {
     const canvas = document.createElement('canvas');
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
 
     ctx.drawImage(img, 0, 0);
-    const pixel = ctx.getImageData(x, y, 1, 1).data;
-    const hex = `#${((1 << 24) + (pixel[0] << 16) + (pixel[1] << 8) + pixel[2]).toString(16).slice(1)}`;
-    analyzeColor(hex);
+    const r = 2;
+    const x0 = Math.max(0, x - r);
+    const y0 = Math.max(0, y - r);
+    const sw = Math.min(canvas.width - x0, r * 2 + 1);
+    const sh = Math.min(canvas.height - y0, r * 2 + 1);
+    const data = ctx.getImageData(x0, y0, Math.max(1, sw), Math.max(1, sh)).data;
+    let sr = 0, sg = 0, sb = 0, n = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 128) continue;
+      sr += data[i];
+      sg += data[i + 1];
+      sb += data[i + 2];
+      n++;
+    }
+    if (n === 0) return;
+    analyzeColor(toHex(sr / n, sg / n, sb / n));
   };
 
   return (
@@ -408,6 +407,8 @@ export function ImageColorPicker() {
                       }`}
                       style={{ backgroundColor: hex }}
                       title={`Analyze ${hex}`}
+                      aria-label={`Analyze detected color ${hex}`}
+                      aria-pressed={selectedHex.toLowerCase() === hex.toLowerCase()}
                     />
                   ))}
                 </div>

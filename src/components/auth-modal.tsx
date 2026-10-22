@@ -5,6 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { X, LogIn, UserPlus, Lock } from 'lucide-react';
+import { readGuestWardrobe, clearGuestWardrobe } from '@/lib/guest-wardrobe';
+import { reconcileStyleProfile } from '@/lib/style-profile';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -13,7 +15,6 @@ interface AuthModalProps {
   initialMode?: 'login' | 'register';
 }
 
-const LOCAL_STORAGE_KEY = 'styleiq_guest_wardrobe_ids';
 
 export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }: AuthModalProps) {
   const [mode, setMode] = useState<'login' | 'register'>(initialMode);
@@ -25,19 +26,20 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
 
   if (!isOpen) return null;
 
+  // Moves a guest's closet (kept in localStorage) into their account in one
+  // request. The local copy is only cleared once the server has accepted it,
+  // so a failed sync doesn't lose the guest's items.
   const syncGuestWardrobe = async () => {
     try {
-      const guestIds: string[] = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]');
-      if (guestIds.length > 0) {
-        for (const garmentId of guestIds) {
-          await fetch('/api/user/wardrobe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ garmentId }),
-          });
-        }
-        localStorage.removeItem(LOCAL_STORAGE_KEY);
-      }
+      const guestIds = readGuestWardrobe();
+      if (guestIds.length === 0) return;
+      const res = await fetch('/api/user/wardrobe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ garmentIds: guestIds.slice(0, 200) }),
+      });
+      // 404 = none of the saved ids exist any more; nothing left worth keeping.
+      if (res.ok || res.status === 404) clearGuestWardrobe();
     } catch (e) {
       console.error('Error syncing guest wardrobe:', e);
     }
@@ -62,6 +64,14 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
 
       if (res.ok && data.user) {
         await syncGuestWardrobe();
+        // Bring the account's style profile to this browser (or upload this
+        // browser's one if the account doesn't have one yet).
+        try {
+          const me = await fetch('/api/auth/me').then((r) => r.json());
+          await reconcileStyleProfile(me.styleProfile);
+        } catch {
+          // Non-fatal: personalization just keeps using the local profile.
+        }
         onSuccess(data.user);
         onClose();
       } else {

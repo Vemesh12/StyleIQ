@@ -1,9 +1,9 @@
 import { prisma } from '@/lib/prisma';
 import { createAdminToken, ADMIN_COOKIE_NAME } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
+import { verifyPassword } from '@/lib/password';
 import { loginSchema } from '@/lib/validation';
-import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,28 +14,26 @@ export async function POST(request: NextRequest) {
     }
     const { email, password } = parsed.data;
 
-    const rateLimitKey = `admin-login:${getClientIp(request)}:${email}`;
-    const { allowed, retryAfterSeconds } = checkRateLimit(rateLimitKey);
-    if (!allowed) {
-      return NextResponse.json(
-        { error: 'Too many login attempts. Please try again later.' },
-        { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } }
-      );
-    }
+    const ip = getClientIp(request);
+    const account = email.toLowerCase();
+    const WINDOW = 15 * 60 * 1000;
+    const limited = await enforceRateLimits(
+      [
+        { key: `admin-login:ip-acct:${ip}:${account}`, limit: 5, windowMs: WINDOW },
+        { key: `admin-login:acct:${account}`, limit: 10, windowMs: WINDOW },
+        { key: `admin-login:ip:${ip}`, limit: 15, windowMs: WINDOW },
+      ],
+      'Too many login attempts. Please try again later.'
+    );
+    if (limited) return limited;
 
     const admin = await prisma.adminUser.findUnique({
       where: { email },
     });
 
-    if (!admin) {
-      return NextResponse.json(
-        { error: 'Invalid credentials' },
-        { status: 401 }
-      );
-    }
-
-    const valid = await bcrypt.compare(password, admin.password);
-    if (!valid) {
+    // Constant-work check: unknown email and wrong password take the same time.
+    const valid = await verifyPassword(password, admin?.password);
+    if (!admin || !valid) {
       return NextResponse.json(
         { error: 'Invalid credentials' },
         { status: 401 }

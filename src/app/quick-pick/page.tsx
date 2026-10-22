@@ -7,12 +7,15 @@ import { Badge } from '@/components/ui/badge';
 import { GarmentIllustration } from '@/components/garment-illustration';
 import Link from 'next/link';
 import { AuthModal } from '@/components/auth-modal';
+import { loadStyleProfile } from '@/lib/style-profile';
+import { OutfitActions } from '@/components/outfit-actions';
 import { Sparkles, RotateCcw, Briefcase, Coffee, Heart, PartyPopper, Bookmark, Check } from 'lucide-react';
 
 interface QuickPickItem {
   id: string;
   name: string;
   slug?: string;
+  typeSlug?: string;
   colors: { name: string; hex: string }[];
 }
 
@@ -21,6 +24,20 @@ interface QuickPickOutfit {
   shirt: QuickPickItem;
   trouser: QuickPickItem;
   shoe: QuickPickItem;
+  layer: QuickPickItem | null;
+  belt: QuickPickItem | null;
+  highlights: string[];
+}
+
+// Pieces in wearing order; layer and belt only when the engine added them.
+function outfitPieces(o: QuickPickOutfit) {
+  return [
+    { category: o.shirt.typeSlug || 'shirt', item: o.shirt },
+    o.layer && { category: o.layer.typeSlug || 'jacket', item: o.layer },
+    { category: 'trouser', item: o.trouser },
+    { category: 'shoe', item: o.shoe },
+    o.belt && { category: 'belt', item: o.belt },
+  ].filter((p): p is { category: string; item: QuickPickItem } => !!p);
 }
 
 // Maps a plain "what are you doing today" question directly to a real
@@ -37,6 +54,7 @@ export default function QuickPickPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [occasionLabel, setOccasionLabel] = useState<string | null>(null);
+  const [occasionSlug, setOccasionSlug] = useState<string | null>(null);
   const [outfits, setOutfits] = useState<QuickPickOutfit[] | null>(null);
   const [savedIndexes, setSavedIndexes] = useState<number[]>([]);
   const [savingIndex, setSavingIndex] = useState<number | null>(null);
@@ -50,8 +68,10 @@ export default function QuickPickPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: occasionLabel ? `${occasionLabel} Look` : 'Quick Pick Outfit',
-          outfitScore: outfit.score,
-          garmentIds: [outfit.shirt.id, outfit.trouser.id, outfit.shoe.id],
+          garmentIds: outfitPieces(outfit).map((p) => p.item.id),
+          // Same context as the shown score; the server recomputes it.
+          occasionSlug: occasionSlug ?? undefined,
+          profile: loadStyleProfile() ?? undefined,
         }),
       });
 
@@ -70,16 +90,17 @@ export default function QuickPickPage() {
     }
   };
 
-  const pick = async (occasionSlug: string, label: string) => {
+  const pick = async (slug: string, label: string) => {
     setLoading(true);
     setError(null);
     setOutfits(null);
     setOccasionLabel(label);
+    setOccasionSlug(slug);
     try {
       const res = await fetch('/api/outfit/quick-pick', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ occasionSlug }),
+        body: JSON.stringify({ occasionSlug: slug, profile: loadStyleProfile() ?? undefined }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -98,6 +119,7 @@ export default function QuickPickPage() {
     setOutfits(null);
     setError(null);
     setOccasionLabel(null);
+    setOccasionSlug(null);
   };
 
   return (
@@ -182,11 +204,7 @@ export default function QuickPickPage() {
                     </Badge>
                   </div>
                   <div className="flex flex-wrap gap-4">
-                    {[
-                      { category: 'shirt', item: outfit.shirt },
-                      { category: 'trouser', item: outfit.trouser },
-                      { category: 'shoe', item: outfit.shoe },
-                    ].map(({ category, item }) => (
+                    {outfitPieces(outfit).map(({ category, item }) => (
                       <Link
                         key={item.id}
                         href={item.slug ? `/encyclopedia/${item.slug}` : '/encyclopedia'}
@@ -202,6 +220,16 @@ export default function QuickPickPage() {
                       </Link>
                     ))}
                   </div>
+
+                  {outfit.highlights?.[0] && (
+                    <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">{outfit.highlights[0]}</p>
+                  )}
+
+                  <OutfitActions
+                    garmentIds={outfitPieces(outfit).map((p) => p.item.id)}
+                    score={outfit.score}
+                    onRequireLogin={() => setAuthModalOpen(true)}
+                  />
 
                   <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-zinc-800">
                     <Button

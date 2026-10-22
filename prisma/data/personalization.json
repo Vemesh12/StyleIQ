@@ -1,0 +1,141 @@
+{
+  "description": "Personalization advice. The seed generates one personalization_rules row per combination of `inputs`; each advice group depends only on the named input.",
+  "inputs": {
+    "hairColor": [
+      "Black",
+      "Blonde",
+      "Brown",
+      "Grey",
+      "Red"
+    ],
+    "eyeColor": [
+      "Black",
+      "Blue",
+      "Brown",
+      "Green",
+      "Grey",
+      "Hazel",
+      "Light Blue",
+      "Light Brown"
+    ],
+    "skinTone": [
+      "Brown",
+      "Fair",
+      "Medium",
+      "Olive",
+      "Very Dark",
+      "Very Fair"
+    ],
+    "underTone": [
+      "Cool",
+      "Neutral",
+      "Warm"
+    ],
+    "torsoLength": [
+      "Balanced",
+      "Long Torso",
+      "Short Torso"
+    ],
+    "bodyProportion": [
+      "Apple",
+      "Hourglass",
+      "Inverted Triangle",
+      "Oval",
+      "Rectangle",
+      "Trapezoid",
+      "Triangle"
+    ]
+  },
+  "adviceByUnderTone": {
+    "Cool": {
+      "recommendedClothingColors": "Jewel Tones, Icy Blue, Lavender, Silver, Emerald",
+      "avoidClothingColors": "Orange, Mustard, Brown",
+      "recommendedJewelryMetal": "Silver",
+      "recommendedClothingColorWheelRegion": "Cool colors (blue, green, violet, cool grays)",
+      "avoidClothingColorWheelRegion": "Opposite on color wheel"
+    },
+    "Neutral": {
+      "recommendedClothingColors": "Soft Pinks, Plums, Teal, Neutral Beige",
+      "avoidClothingColors": "Fluorescents, Harsh Yellow",
+      "recommendedJewelryMetal": "Rose Gold",
+      "recommendedClothingColorWheelRegion": "Neutral-friendly zones (balanced warm/cool like teal, plum, taupe)",
+      "avoidClothingColorWheelRegion": "Avoid clashing or harsh contrasts"
+    },
+    "Warm": {
+      "recommendedClothingColors": "Earth Tones, Olive, Coral, Peach, Mustard, Warm Red",
+      "avoidClothingColors": "Cool Blue, Icy Gray, Jewel Tones",
+      "recommendedJewelryMetal": "Gold",
+      "recommendedClothingColorWheelRegion": "Warm colors (red, orange, yellow, warm greens)",
+      "avoidClothingColorWheelRegion": "Opposite on color wheel"
+    }
+  },
+  "adviceByBodyProportion": {
+    "Apple": {
+      "recommendedFittingStyle": "Empire Waist",
+      "recommendedMaterials": "Drapey Fabric",
+      "recommendedPatterns": "Dark Solid Tops",
+      "fabricNature": "Drapey",
+      "dontExaggerate": "Don't exaggerate waist",
+      "doExaggerate": "Exaggerate shoulders and legs"
+    },
+    "Hourglass": {
+      "recommendedFittingStyle": "Tailored Fit",
+      "recommendedMaterials": "Stretchy, Soft Fabric",
+      "recommendedPatterns": "Subtle Prints",
+      "fabricNature": "Stretchy",
+      "dontExaggerate": "Don't exaggerate curves excessively",
+      "doExaggerate": "Highlight waistline"
+    },
+    "Inverted Triangle": {
+      "recommendedFittingStyle": "A-Line Bottoms",
+      "recommendedMaterials": "Flowy Fabric",
+      "recommendedPatterns": "Vertical Stripes",
+      "fabricNature": "Flowy",
+      "dontExaggerate": "Don't exaggerate shoulders",
+      "doExaggerate": "Exaggerate hips"
+    },
+    "Oval": {
+      "recommendedFittingStyle": "Wraps and Empire",
+      "recommendedMaterials": "Jersey, Knits",
+      "recommendedPatterns": "Diagonal Lines",
+      "fabricNature": "Stretchy",
+      "dontExaggerate": "Don't exaggerate midsection",
+      "doExaggerate": "Exaggerate neckline and legs"
+    },
+    "Rectangle": {
+      "recommendedFittingStyle": "Defined Waist",
+      "recommendedMaterials": "Structured Cotton",
+      "recommendedPatterns": "Curved Lines",
+      "fabricNature": "Firm",
+      "dontExaggerate": "Don't exaggerate straight lines",
+      "doExaggerate": "Exaggerate waistline"
+    },
+    "Trapezoid": {
+      "recommendedFittingStyle": "Balanced Fit",
+      "recommendedMaterials": "Soft Blends",
+      "recommendedPatterns": "Simple Solids",
+      "fabricNature": "Soft",
+      "dontExaggerate": "Don't exaggerate any feature",
+      "doExaggerate": "Balance upper and lower body"
+    },
+    "Triangle": {
+      "recommendedFittingStyle": "Emphasize Top",
+      "recommendedMaterials": "Lightweight Cotton",
+      "recommendedPatterns": "Bright Tops",
+      "fabricNature": "Light",
+      "dontExaggerate": "Don't exaggerate hips",
+      "doExaggerate": "Exaggerate upper body"
+    }
+  },
+  "adviceByTorsoLength": {
+    "Balanced": {
+      "recommendedShoes": "Any Style"
+    },
+    "Long Torso": {
+      "recommendedShoes": "Heels or Platforms"
+    },
+    "Short Torso": {
+      "recommendedShoes": "Low Heels or Flats"
+    }
+  }
+}

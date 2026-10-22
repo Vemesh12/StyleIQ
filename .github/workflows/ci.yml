@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Test-only values; nothing here is a real secret.
+  JWT_SECRET: ci-only-secret-that-is-at-least-32-characters
+  NEXT_TELEMETRY_DISABLED: '1'
+
+jobs:
+  checks:
+    name: Lint, types, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  build:
+    name: Migrate, seed, build, end-to-end
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: styleiq
+          POSTGRES_PASSWORD: styleiq
+          POSTGRES_DB: styleiq
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U styleiq"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://styleiq:styleiq@localhost:5432/styleiq?schema=public
+      ADMIN_EMAIL: ci@example.com
+      ADMIN_PASSWORD: ci-admin-password-123
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      # Proves a fresh database can be built from the repo alone.
+      - run: npm run db:setup
+      # Fails if schema.prisma and the migrations have drifted apart.
+      - run: npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code
+      - run: npm run build
+      # End-to-end: real HTTP requests against the production build + database.
+      - name: Start app
+        run: |
+          npm start > app.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf http://localhost:3000/ > /dev/null && exit 0; sleep 1; done
+          cat app.log; exit 1
+      - run: npm run test:e2e
+      - name: App log (on failure)
+        if: failure()
+        run: cat app.log

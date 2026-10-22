@@ -1,3 +1,5 @@
+import { serializeJsonLd } from '@/lib/json-ld';
+import { MarkdownContent, readingMinutes } from '@/components/markdown-content';
 import { prisma } from '@/lib/prisma';
 import { notFound } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
@@ -39,7 +41,7 @@ export default async function GuideDetailPage({ params }: PageProps) {
     <div className="w-full px-4 sm:px-8 lg:px-12 py-12 bg-slate-50 dark:bg-zinc-950 transition-colors duration-300">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
       />
 
       <div className="max-w-4xl mx-auto space-y-8">
@@ -73,7 +75,7 @@ export default async function GuideDetailPage({ params }: PageProps) {
             </span>
             <span className="flex items-center gap-1.5">
               <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-              5 min read
+              {readingMinutes(guide.content)} min read
             </span>
           </div>
         </div>
@@ -81,9 +83,7 @@ export default async function GuideDetailPage({ params }: PageProps) {
         {/* Article Body */}
         <Card className="bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800">
           <CardContent className="p-8 space-y-6 text-slate-800 dark:text-zinc-200 leading-relaxed font-normal text-base">
-            {guide.content.split('\n\n').map((paragraph, index) => (
-              <p key={index}>{paragraph}</p>
-            ))}
+            <MarkdownContent source={guide.content} />
           </CardContent>
         </Card>
       </div>

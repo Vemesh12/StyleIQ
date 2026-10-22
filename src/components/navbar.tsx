@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { AuthModal } from '@/components/auth-modal';
+import { reconcileStyleProfile } from '@/lib/style-profile';
 import { ThemeToggle } from '@/components/theme-toggle';
 import {
   BookOpen,
@@ -38,20 +39,20 @@ export function Navbar() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [user, setUser] = useState<{ id: string; name: string; email: string } | null>(null);
 
-  const checkUserSession = async () => {
-    try {
-      const res = await fetch('/api/auth/me');
-      if (res.ok) {
-        const data = await res.json();
-        setUser(data.user);
-      }
-    } catch {
-      setUser(null);
-    }
-  };
-
   useEffect(() => {
-    checkUserSession();
+    let active = true;
+    fetch('/api/auth/me')
+      .then((res) => (res.ok ? res.json() : { user: null }))
+      .then((data) => {
+        if (!active) return;
+        setUser(data.user ?? null);
+        // Signed in: make this browser use the account's style profile.
+        if (data.user) void reconcileStyleProfile(data.styleProfile);
+      })
+      .catch(() => active && setUser(null));
+    return () => {
+      active = false;
+    };
   }, []);
 
   const handleLogout = async () => {

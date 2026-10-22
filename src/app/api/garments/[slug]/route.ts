@@ -7,8 +7,8 @@ export async function GET(
 ) {
   const { slug } = await params;
 
-  const garment = await prisma.garment.findUnique({
-    where: { slug },
+  const garment = await prisma.garment.findFirst({
+    where: { slug, ownerId: null },
     include: {
       garmentType: true,
       colors: { include: { color: true } },

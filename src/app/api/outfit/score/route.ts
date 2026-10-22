@@ -1,9 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { calculateOutfitScore } from '@/lib/rule-engine/score-calculator';
 import { outfitScoreSchema } from '@/lib/validation';
+import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
   try {
+    const limited = await enforceRateLimits([
+      { key: `outfit-score:${getClientIp(request)}`, limit: 30, windowMs: 60 * 1000 },
+    ]);
+    if (limited) return limited;
+
     const body = await request.json();
     const parsed = outfitScoreSchema.safeParse(body);
     if (!parsed.success) {

@@ -7,7 +7,8 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: '*',
       allow: '/',
-      disallow: ['/admin/', '/api/admin/'],
+      // Personal and machine-only routes have nothing to index.
+      disallow: ['/admin/', '/api/', '/wardrobe'],
     },
     sitemap: `${baseUrl}/sitemap.xml`,
   };

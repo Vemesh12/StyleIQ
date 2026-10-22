@@ -2,6 +2,10 @@ import { prisma } from '@/lib/prisma';
 import { getAdminSession } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { adminCompatibilityRuleSchema } from '@/lib/validation';
+import { invalidateEngineCache } from '@/lib/rule-engine/catalog';
+import { clientErrorResponse } from '@/lib/api-errors';
+import { revalidatePublicContent } from '@/lib/revalidate';
+import { compatibilityTypeForRating } from '@/lib/rule-engine/rating';
 
 export async function GET() {
   const session = await getAdminSession();
@@ -23,23 +27,43 @@ export async function POST(request: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const body = await request.json();
-    const parsed = adminCompatibilityRuleSchema.safeParse(body);
+    const parsed = adminCompatibilityRuleSchema.safeParse(await request.json());
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
-    const { garmentAId, garmentBId, rating, reason, compatibilityType } = parsed.data;
+    const { garmentAId, garmentBId, rating, reason } = parsed.data;
+    if (garmentAId === garmentBId) {
+      return NextResponse.json({ error: 'Pick two different garments.' }, { status: 400 });
+    }
+    const compatibilityType = compatibilityTypeForRating(rating);
+    const data = { rating, reason: reason ?? '', compatibilityType };
 
-    const rule = await prisma.compatibilityRule.upsert({
-      where: {
-        garmentAId_garmentBId: { garmentAId, garmentBId },
-      },
-      update: { rating, reason, compatibilityType },
-      create: { garmentAId, garmentBId, rating, reason, compatibilityType },
+    // A pair is one rule regardless of direction: if B->A already exists,
+    // update it instead of creating a second, possibly contradicting, A->B.
+    const rule = await prisma.$transaction(async (tx) => {
+      const existing = await tx.compatibilityRule.findMany({
+        where: {
+          OR: [
+            { garmentAId, garmentBId },
+            { garmentAId: garmentBId, garmentBId: garmentAId },
+          ],
+        },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (existing.length === 0) {
+        return tx.compatibilityRule.create({ data: { garmentAId, garmentBId, ...data } });
+      }
+      const [keep, ...duplicates] = existing;
+      if (duplicates.length) await tx.compatibilityRule.deleteMany({ where: { id: { in: duplicates.map((d) => d.id) } } });
+      return tx.compatibilityRule.update({ where: { id: keep.id }, data });
     });
 
+    invalidateEngineCache();
+    revalidatePublicContent('compatibility');
     return NextResponse.json(rule, { status: 201 });
   } catch (error) {
+    const clientError = clientErrorResponse(error, { foreignKey: 'One of the selected garments no longer exists.' });
+    if (clientError) return clientError;
     console.error('Error adding compatibility rule:', error);
     return NextResponse.json({ error: 'Failed to create rule' }, { status: 500 });
   }
@@ -53,6 +77,9 @@ export async function DELETE(request: NextRequest) {
   const id = searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 });
 
-  await prisma.compatibilityRule.delete({ where: { id } });
+  const { count } = await prisma.compatibilityRule.deleteMany({ where: { id } });
+  if (count === 0) return NextResponse.json({ error: 'Rule not found' }, { status: 404 });
+  invalidateEngineCache();
+  revalidatePublicContent('compatibility');
   return NextResponse.json({ success: true });
 }

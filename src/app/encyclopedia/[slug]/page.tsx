@@ -1,3 +1,4 @@
+import { serializeJsonLd } from '@/lib/json-ld';
 import { prisma } from '@/lib/prisma';
 import { notFound } from 'next/navigation';
 import { GarmentCard } from '@/components/garment-card';
@@ -17,8 +18,8 @@ interface PageProps {
 
 export default async function GarmentDetailPage({ params }: PageProps) {
   const { slug } = await params;
-  const garment = await prisma.garment.findUnique({
-    where: { slug },
+  const garment = await prisma.garment.findFirst({
+    where: { slug, ownerId: null },
     include: {
       garmentType: true,
       colors: { include: { color: true } },
@@ -88,7 +89,7 @@ export default async function GarmentDetailPage({ params }: PageProps) {
     <div className="w-full px-4 sm:px-8 lg:px-12 py-12 bg-slate-50 dark:bg-zinc-950 transition-colors duration-300">
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
       />
 
       <div className="max-w-6xl mx-auto space-y-12">

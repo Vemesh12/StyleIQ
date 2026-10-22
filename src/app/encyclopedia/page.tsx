@@ -9,7 +9,23 @@ import Link from 'next/link';
 export const revalidate = 60;
 
 interface PageProps {
-  searchParams: Promise<{ type?: string; color?: string; occasion?: string; q?: string }>;
+  searchParams: Promise<{ type?: string; color?: string; occasion?: string; q?: string; page?: string }>;
+}
+
+// Rendering every garment card at once produced ~1.9 MB of HTML; pages of
+// 24 keep the page light.
+const PAGE_SIZE = 24;
+
+type Filters = { type?: string; color?: string; occasion?: string; q?: string; page?: number };
+
+/** Builds an /encyclopedia URL from filters, dropping empty ones. */
+function encyclopediaHref(filters: Filters): string {
+  const qs = new URLSearchParams();
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== '' && !(key === 'page' && value === 1)) qs.set(key, String(value));
+  }
+  const query = qs.toString();
+  return query ? `/encyclopedia?${query}` : '/encyclopedia';
 }
 
 export default async function EncyclopediaPage({ searchParams }: PageProps) {
@@ -17,15 +33,20 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
   const typeFilter = params.type;
   const colorFilter = params.color;
   const occasionFilter = params.occasion;
-  const searchQuery = params.q;
+  const searchQuery = params.q?.trim() || undefined;
+  const page = Math.max(1, parseInt(params.page || '1') || 1);
+  const current: Filters = { type: typeFilter, color: colorFilter, occasion: occasionFilter, q: searchQuery };
 
   const [types, colors, occasions] = await Promise.all([
     prisma.garmentType.findMany({ orderBy: { name: 'asc' } }),
-    prisma.color.findMany({ orderBy: { name: 'asc' } }),
+    // Only colors some garment actually uses — listing all ~210 palette
+    // colors made a long filter of mostly empty results.
+    prisma.color.findMany({ where: { garmentColors: { some: { garment: { ownerId: null } } } }, orderBy: { name: 'asc' } }),
     prisma.occasion.findMany({ orderBy: { formalityLevel: 'desc' } }),
   ]);
 
-  const where: Prisma.GarmentWhereInput = {};
+  // Catalog only — users' own items are private.
+  const where: Prisma.GarmentWhereInput = { ownerId: null };
   if (typeFilter) {
     where.garmentType = { slug: typeFilter };
   }
@@ -36,20 +57,27 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
     where.occasions = { some: { occasion: { slug: occasionFilter } } };
   }
   if (searchQuery) {
+    // Case-insensitive: "linen" should find "White Linen Shirt".
     where.OR = [
-      { name: { contains: searchQuery } },
-      { description: { contains: searchQuery } },
+      { name: { contains: searchQuery, mode: 'insensitive' } },
+      { description: { contains: searchQuery, mode: 'insensitive' } },
     ];
   }
 
-  const garments = await prisma.garment.findMany({
-    where,
-    include: {
-      garmentType: true,
-      colors: { include: { color: true }, where: { isPrimary: true } },
-    },
-    orderBy: { formalityLevel: 'desc' },
-  });
+  const [total, garments] = await Promise.all([
+    prisma.garment.count({ where }),
+    prisma.garment.findMany({
+      where,
+      include: {
+        garmentType: true,
+        colors: { include: { color: true }, where: { isPrimary: true } },
+      },
+      orderBy: [{ formalityLevel: 'desc' }, { name: 'asc' }],
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+    }),
+  ]);
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
     <div className="w-full px-4 sm:px-8 lg:px-12 py-12 bg-slate-50 dark:bg-zinc-950 min-h-screen transition-colors duration-300">
@@ -58,7 +86,7 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
         <div>
           <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 text-sm font-semibold mb-2">
             <BookOpen className="w-4 h-4" />
-            Clothes & Styles Directory ({garments.length} Items)
+            Clothes & Styles Directory ({total} Items)
           </div>
           <h1 className="text-4xl font-extrabold text-slate-900 dark:text-white mb-2">Clothing Encyclopedia</h1>
           <p className="text-slate-600 dark:text-zinc-400 max-w-2xl text-base font-medium">
@@ -108,13 +136,13 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
               <div className="space-y-2">
                 <h3 className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Garment Category</h3>
                 <div className="flex flex-wrap gap-1.5">
-                  <Link href={`/encyclopedia?${colorFilter ? `color=${colorFilter}` : ''}${occasionFilter ? `&occasion=${occasionFilter}` : ''}`}>
+                  <Link href={encyclopediaHref({ ...current, type: undefined })}>
                     <Badge variant={!typeFilter ? 'default' : 'outline'} className="cursor-pointer">
                       All Types
                     </Badge>
                   </Link>
                   {types.map((t) => (
-                    <Link key={t.id} href={`/encyclopedia?type=${t.slug}${colorFilter ? `&color=${colorFilter}` : ''}${occasionFilter ? `&occasion=${occasionFilter}` : ''}`}>
+                    <Link key={t.id} href={encyclopediaHref({ ...current, type: t.slug })}>
                       <Badge variant={typeFilter === t.slug ? 'default' : 'outline'} className="cursor-pointer">
                         {t.name}
                       </Badge>
@@ -129,13 +157,13 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
                   Color {colorFilter && <span className="text-amber-600 dark:text-amber-400">(1 selected)</span>}
                 </h3>
                 <div className="flex flex-wrap gap-1.5 max-h-64 overflow-y-auto pr-1">
-                  <Link href={`/encyclopedia?${typeFilter ? `type=${typeFilter}` : ''}${occasionFilter ? `&occasion=${occasionFilter}` : ''}`}>
+                  <Link href={encyclopediaHref({ ...current, color: undefined })}>
                     <Badge variant={!colorFilter ? 'default' : 'outline'} className="cursor-pointer">
                       All Colors
                     </Badge>
                   </Link>
                   {colors.map((c) => (
-                    <Link key={c.id} href={`/encyclopedia?${typeFilter ? `type=${typeFilter}&` : ''}color=${c.slug}${occasionFilter ? `&occasion=${occasionFilter}` : ''}`}>
+                    <Link key={c.id} href={encyclopediaHref({ ...current, color: c.slug })}>
                       <Badge
                         variant={colorFilter === c.slug ? 'default' : 'outline'}
                         className="cursor-pointer gap-1.5"
@@ -155,13 +183,13 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
               <div className="space-y-2">
                 <h3 className="text-xs font-bold text-slate-500 dark:text-zinc-400 uppercase tracking-wider">Occasion</h3>
                 <div className="flex flex-wrap gap-1.5">
-                  <Link href={`/encyclopedia?${typeFilter ? `type=${typeFilter}` : ''}${colorFilter ? `&color=${colorFilter}` : ''}`}>
+                  <Link href={encyclopediaHref({ ...current, occasion: undefined })}>
                     <Badge variant={!occasionFilter ? 'default' : 'outline'} className="cursor-pointer">
                       All Occasions
                     </Badge>
                   </Link>
                   {occasions.map((o) => (
-                    <Link key={o.id} href={`/encyclopedia?${typeFilter ? `type=${typeFilter}&` : ''}${colorFilter ? `color=${colorFilter}&` : ''}occasion=${o.slug}`}>
+                    <Link key={o.id} href={encyclopediaHref({ ...current, occasion: o.slug })}>
                       <Badge variant={occasionFilter === o.slug ? 'default' : 'outline'} className="cursor-pointer">
                         {o.name}
                       </Badge>
@@ -177,7 +205,9 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
         <div className="lg:col-span-9">
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm text-slate-600 dark:text-zinc-400 font-semibold">
-              Showing <span className="text-slate-900 dark:text-white font-bold">{garments.length}</span> master garments
+              Showing <span className="text-slate-900 dark:text-white font-bold">{garments.length}</span> of{' '}
+              <span className="text-slate-900 dark:text-white font-bold">{total}</span> garments
+              {pageCount > 1 && ` — page ${page} of ${pageCount}`}
             </span>
           </div>
 
@@ -197,7 +227,31 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
                 />
               ))}
             </div>
-          ) : (
+          ) : null}
+
+          {pageCount > 1 && (
+            <nav aria-label="Encyclopedia pages" className="flex items-center justify-center gap-3 pt-8">
+              {page > 1 ? (
+                <Link href={encyclopediaHref({ ...current, page: page - 1 })} rel="prev">
+                  <Badge variant="outline" className="cursor-pointer py-1.5 px-4">← Previous</Badge>
+                </Link>
+              ) : (
+                <Badge variant="outline" className="py-1.5 px-4 opacity-40" aria-disabled="true">← Previous</Badge>
+              )}
+              <span className="text-sm text-slate-600 dark:text-zinc-400 font-semibold">
+                Page {page} of {pageCount}
+              </span>
+              {page < pageCount ? (
+                <Link href={encyclopediaHref({ ...current, page: page + 1 })} rel="next">
+                  <Badge variant="outline" className="cursor-pointer py-1.5 px-4">Next →</Badge>
+                </Link>
+              ) : (
+                <Badge variant="outline" className="py-1.5 px-4 opacity-40" aria-disabled="true">Next →</Badge>
+              )}
+            </nav>
+          )}
+
+          {garments.length === 0 && (
             <Card className="text-center py-16 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800">
               <CardContent className="space-y-4">
                 <Shirt className="w-12 h-12 text-slate-300 dark:text-zinc-600 mx-auto" />

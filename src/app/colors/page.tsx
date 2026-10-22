@@ -4,8 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { ColorWheel } from '@/components/color-wheel';
 import { ImageColorPicker } from '@/components/image-color-picker';
 import { Palette, CheckCircle2, AlertTriangle } from 'lucide-react';
-import { evaluateColorPairHarmony } from '@/lib/rule-engine/color-rules';
-import { buildColorRuleLookup } from '@/lib/rule-engine/picker-scoring';
+import { evaluateColorPairHarmony, buildColorRuleLookup } from '@/lib/rule-engine/color-rules';
 
 export const revalidate = 60;
 
@@ -28,7 +27,8 @@ export default async function ColorGuidePage() {
   ]);
 
   const avoidPairs: DisplayPair[] = colorRules
-    .filter((r) => r.harmony === 'avoid')
+    // A curated pair is a clash when its score is below 6.
+    .filter((r) => r.score < 6)
     .map((r) => ({ id: r.id, colorA: r.colorA, colorB: r.colorB, score: r.score, harmony: r.harmony, reason: r.reason }));
 
   // Compute pairwise harmony across the ENTIRE color palette (DB rule where
@@ -52,6 +52,19 @@ export default async function ColorGuidePage() {
     }
   }
   allPairs.sort((a, b) => b.score - a.score);
+
+  // Also show computed clashes (not just the hand-curated "avoid" rules),
+  // a few per clash type, worst first.
+  const clashCounts: Record<string, number> = {};
+  for (const pair of [...allPairs].reverse()) {
+    if (pair.score >= 6 || avoidPairs.length >= 9) break;
+    const key = [pair.colorA.name, pair.colorB.name].sort().join('|');
+    if (avoidPairs.some((p) => [p.colorA.name, p.colorB.name].sort().join('|') === key)) continue;
+    const count = clashCounts[pair.harmony] || 0;
+    if (count >= 3) continue;
+    clashCounts[pair.harmony] = count + 1;
+    avoidPairs.push(pair);
+  }
 
   // Cap how many pairs of any one harmony "type" can appear, so the top list
   // isn't just neutral-anchored pairs (which mathematically always score

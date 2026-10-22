@@ -5,8 +5,12 @@ import { Card, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { OutfitScoreDisplay } from '@/components/outfit-score-display';
 import { StarRating } from '@/components/star-rating';
-import { GarmentIllustration } from '@/components/garment-illustration';
 import { AuthModal } from '@/components/auth-modal';
+import { GarmentChoiceCards, type GarmentOption } from './garment-choice-cards';
+import Link from 'next/link';
+import { SLOT_TYPES } from '@/lib/rule-engine/slots';
+import { loadStyleProfile } from '@/lib/style-profile';
+import { fetchAllGarments } from '@/lib/garments-client';
 import {
   Layers,
   Sparkles,
@@ -35,18 +39,6 @@ interface Season {
   slug: string;
 }
 
-interface GarmentOption {
-  id: string;
-  name: string;
-  slug: string;
-  formalityLevel: number;
-  garmentType: string;
-  colors: { name: string; hex: string }[];
-  compatibilityType?: string;
-  rating?: number;
-  reason?: string;
-}
-
 interface RawGarment {
   id: string;
   name: string;
@@ -69,8 +61,11 @@ interface ScoreBreakdown {
 interface OutfitScoreResult {
   totalScore: number;
   breakdown: ScoreBreakdown;
+  dimensions: Record<string, { score: number; max: number; applied: boolean; note?: string }>;
   rating: string;
   suggestions: string[];
+  highlights: string[];
+  personalization: { matchedOn: string[]; ignored: string[] };
 }
 
 export default function OutfitBuilderPage() {
@@ -84,11 +79,15 @@ export default function OutfitBuilderPage() {
   const [layers, setLayers] = useState<GarmentOption[]>([]);
   const [trousers, setTrousers] = useState<GarmentOption[]>([]);
   const [shoes, setShoes] = useState<GarmentOption[]>([]);
+  const [belts, setBelts] = useState<GarmentOption[]>([]);
 
   const [selectedShirt, setSelectedShirt] = useState<GarmentOption | null>(null);
   const [selectedLayer, setSelectedLayer] = useState<GarmentOption | null>(null);
   const [selectedTrouser, setSelectedTrouser] = useState<GarmentOption | null>(null);
   const [selectedShoe, setSelectedShoe] = useState<GarmentOption | null>(null);
+  const [selectedBelt, setSelectedBelt] = useState<GarmentOption | null>(null);
+  const [scoreError, setScoreError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [scoreResult, setScoreResult] = useState<OutfitScoreResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
@@ -97,10 +96,8 @@ export default function OutfitBuilderPage() {
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
-    fetch('/api/garments?limit=200')
-      .then((res) => res.json())
-      .then((data) => {
-        const garments: RawGarment[] = data.garments || [];
+    fetchAllGarments()
+      .then((garments: RawGarment[]) => {
 
         const formatGarments = (items: RawGarment[]): GarmentOption[] =>
           items.map((g) => ({
@@ -112,27 +109,40 @@ export default function OutfitBuilderPage() {
             colors: g.colors,
           }));
 
-        const topTypes = ['shirt', 'tshirt', 'polo'];
-        const layerTypes = ['jacket', 'sweater', 'cardigan', 'hoodie', 'knitwear'];
-        setShirts(formatGarments(garments.filter((g) => topTypes.includes(g.garmentTypeSlug))));
-        setLayers(formatGarments(garments.filter((g) => layerTypes.includes(g.garmentTypeSlug))));
-        setTrousers(formatGarments(garments.filter((g) => g.garmentTypeSlug === 'trouser')));
-        setShoes(formatGarments(garments.filter((g) => g.garmentTypeSlug === 'shoe')));
+        const ofTypes = (types: string[]) => formatGarments(garments.filter((g) => types.includes(g.garmentTypeSlug)));
+        setShirts(ofTypes(SLOT_TYPES.top));
+        setLayers(ofTypes(SLOT_TYPES.layer));
+        setTrousers(ofTypes(SLOT_TYPES.bottom));
+        setShoes(ofTypes(SLOT_TYPES.footwear));
+        setBelts(ofTypes(['belt']));
+      })
+      .catch((err) => {
+        console.error('Failed to load garments:', err);
+        setLoadError('Could not load the clothing catalog. Check your connection and refresh.');
       });
 
-    fetch('/api/garments?listOccasions=true')
-      .then((res) => res.json())
-      .then((data: Occasion[]) => setOccasions(data));
-
-    fetch('/api/garments?listSeasons=true')
-      .then((res) => res.json())
-      .then((data: Season[]) => setSeasons(data));
+    const getJson = (url: string) =>
+      fetch(url).then((res) => {
+        if (!res.ok) throw new Error(`${url} failed (${res.status})`);
+        return res.json();
+      });
+    Promise.all([getJson('/api/garments?listOccasions=true'), getJson('/api/garments?listSeasons=true')])
+      .then(([occasionRows, seasonRows]: [Occasion[], Season[]]) => {
+        setOccasions(occasionRows);
+        setSeasons(seasonRows);
+      })
+      .catch((err) => {
+        console.error('Failed to load occasions/seasons:', err);
+        setLoadError('Could not load occasions and seasons. Check your connection and refresh.');
+      });
   }, []);
 
   const calculateScore = async () => {
     if (!selectedShirt || !selectedTrouser || !selectedShoe) return;
     setLoading(true);
-    setStep(7);
+    setScoreError(null);
+    setScoreResult(null);
+    setStep(8);
 
     try {
       const res = await fetch('/api/outfit/score', {
@@ -143,15 +153,21 @@ export default function OutfitBuilderPage() {
           layerId: selectedLayer?.id,
           trouserId: selectedTrouser.id,
           shoeId: selectedShoe.id,
+          beltId: selectedBelt?.id,
           occasionId: selectedOccasion?.id,
           seasonId: selectedSeason?.id,
+          // Personalizes skin-tone and body-shape scoring when the person has
+          // generated a profile in the Style Advisor.
+          profile: loadStyleProfile() ?? undefined,
         }),
       });
 
       const data = await res.json();
-      setScoreResult(data);
+      if (res.ok) setScoreResult(data);
+      else setScoreError(data.error || 'Could not score this outfit — please try again.');
     } catch (err) {
       console.error('Scoring error:', err);
+      setScoreError('Could not score this outfit — please try again.');
     } finally {
       setLoading(false);
     }
@@ -166,6 +182,7 @@ export default function OutfitBuilderPage() {
         selectedLayer?.id,
         selectedTrouser.id,
         selectedShoe.id,
+        selectedBelt?.id,
       ].filter(Boolean) as string[];
 
       const res = await fetch('/api/user/outfits', {
@@ -173,8 +190,12 @@ export default function OutfitBuilderPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: selectedOccasion ? `${selectedOccasion.name} Look` : 'Custom Outfit',
-          outfitScore: scoreResult?.totalScore ?? 85,
           garmentIds,
+          // Same context as the score shown, so the server-computed saved
+          // score matches what the user saw.
+          occasionId: selectedOccasion?.id,
+          seasonId: selectedSeason?.id,
+          profile: loadStyleProfile() ?? undefined,
         }),
       });
 
@@ -201,7 +222,9 @@ export default function OutfitBuilderPage() {
     setSelectedLayer(null);
     setSelectedTrouser(null);
     setSelectedShoe(null);
+    setSelectedBelt(null);
     setScoreResult(null);
+    setScoreError(null);
     setSaved(false);
   };
 
@@ -221,6 +244,12 @@ export default function OutfitBuilderPage() {
         </p>
       </div>
 
+      {loadError && (
+        <p role="alert" className="max-w-3xl mx-auto text-sm font-medium text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-xl px-4 py-3 text-center">
+          {loadError}
+        </p>
+      )}
+
       {/* Progress Steps */}
       <div className="flex items-center justify-center gap-2 mb-12 flex-wrap">
         {[
@@ -230,7 +259,8 @@ export default function OutfitBuilderPage() {
           { num: 4, label: 'Outerwear', icon: Layers },
           { num: 5, label: 'Trouser', icon: Scissors },
           { num: 6, label: 'Shoe', icon: Shirt },
-          { num: 7, label: 'Score', icon: Sparkles },
+          { num: 7, label: 'Belt', icon: Layers },
+          { num: 8, label: 'Score', icon: Sparkles },
         ].map((s) => {
           const isActive = step === s.num;
           const isDone = step > s.num;
@@ -240,6 +270,8 @@ export default function OutfitBuilderPage() {
               <button
                 onClick={() => isDone && setStep(s.num)}
                 disabled={!isDone && !isActive}
+                aria-current={isActive ? 'step' : undefined}
+                title={!isDone && !isActive ? 'Finish the earlier steps first' : isDone ? `Go back to ${s.label}` : undefined}
                 className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all ${isActive
                   ? 'bg-amber-600 text-white shadow-md'
                   : isDone
@@ -250,7 +282,7 @@ export default function OutfitBuilderPage() {
                 <s.icon className="w-3.5 h-3.5" />
                 {s.label}
               </button>
-              {s.num < 7 && <span className="text-slate-400 dark:text-zinc-600 text-xs">→</span>}
+              {s.num < 8 && <span className="text-slate-400 dark:text-zinc-600 text-xs">→</span>}
             </div>
           );
         })}
@@ -319,32 +351,7 @@ export default function OutfitBuilderPage() {
             Select a Shirt / Top
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {shirts.map((shirt) => (
-              <Card
-                key={shirt.id}
-                onClick={() => {
-                  setSelectedShirt(shirt);
-                  setStep(4);
-                }}
-                className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 flex flex-col justify-between ${selectedShirt?.id === shirt.id ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
-                  }`}
-              >
-                {/* Colored garment illustration in this item's actual color(s) */}
-                <div className="flex items-center justify-center mb-4">
-                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-200 dark:border-amber-900/40">
-                    <GarmentIllustration category="shirt" colors={shirt.colors} size={48} />
-                  </div>
-                </div>
-
-                <CardTitle className="text-base font-extrabold text-slate-900 dark:text-white mb-3 line-clamp-2">{shirt.name}</CardTitle>
-
-                {/* BOTTOM: Formality Star Rating */}
-                <div className="pt-2 border-t border-slate-100 dark:border-zinc-800 flex items-center justify-between">
-                  <span className="text-xs text-slate-500 dark:text-zinc-400 font-semibold uppercase tracking-wider">Formality</span>
-                  <StarRating rating={shirt.formalityLevel} size="sm" />
-                </div>
-              </Card>
-            ))}
+            <GarmentChoiceCards items={shirts} selectedId={selectedShirt?.id} onSelect={(g) => { setSelectedShirt(g); setStep(4); }} category="shirt" accent="amber" />
           </div>
           <div className="flex justify-between pt-4">
             <Button variant="outline" onClick={() => setStep(2)}>
@@ -401,32 +408,7 @@ export default function OutfitBuilderPage() {
               </Button>
             </Card>
 
-            {layers.map((layer) => (
-              <Card
-                key={layer.id}
-                onClick={() => {
-                  setSelectedLayer(layer);
-                  setStep(5);
-                }}
-                className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 flex flex-col justify-between ${selectedLayer?.id === layer.id ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
-                  }`}
-              >
-                <div className="flex items-center justify-center mb-4">
-                  <div className="p-3 rounded-xl bg-purple-500/10 border border-purple-200 dark:border-purple-900/40">
-                    <GarmentIllustration category="jacket" colors={layer.colors} size={48} />
-                  </div>
-                </div>
-
-                <CardTitle className="text-base font-extrabold text-slate-900 dark:text-white mb-3 line-clamp-2">
-                  {layer.name}
-                </CardTitle>
-
-                <div className="pt-2 border-t border-slate-100 dark:border-zinc-800 flex items-center justify-between">
-                  <span className="text-xs text-slate-500 dark:text-zinc-400 font-semibold uppercase tracking-wider">Formality</span>
-                  <StarRating rating={layer.formalityLevel} size="sm" />
-                </div>
-              </Card>
-            ))}
+            <GarmentChoiceCards items={layers} selectedId={selectedLayer?.id} onSelect={(g) => { setSelectedLayer(g); setStep(5); }} category="jacket" accent="purple" />
           </div>
 
           <div className="flex justify-between pt-4">
@@ -453,32 +435,7 @@ export default function OutfitBuilderPage() {
             Select Trousers / Pants
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {trousers.map((trouser) => (
-              <Card
-                key={trouser.id}
-                onClick={() => {
-                  setSelectedTrouser(trouser);
-                  setStep(6);
-                }}
-                className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 flex flex-col justify-between ${selectedTrouser?.id === trouser.id ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
-                  }`}
-              >
-                {/* Colored garment illustration in this item's actual color(s) */}
-                <div className="flex items-center justify-center mb-4">
-                  <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-200 dark:border-emerald-900/40">
-                    <GarmentIllustration category="trouser" colors={trouser.colors} size={48} />
-                  </div>
-                </div>
-
-                <CardTitle className="text-base font-extrabold text-slate-900 dark:text-white mb-3 line-clamp-2">{trouser.name}</CardTitle>
-
-                {/* BOTTOM: Formality Star Rating */}
-                <div className="pt-2 border-t border-slate-100 dark:border-zinc-800 flex items-center justify-between">
-                  <span className="text-xs text-slate-500 dark:text-zinc-400 font-semibold uppercase tracking-wider">Formality</span>
-                  <StarRating rating={trouser.formalityLevel} size="sm" />
-                </div>
-              </Card>
-            ))}
+            <GarmentChoiceCards items={trousers} selectedId={selectedTrouser?.id} onSelect={(g) => { setSelectedTrouser(g); setStep(6); }} category="trouser" accent="emerald" />
           </div>
           <div className="flex justify-between pt-4">
             <Button variant="outline" onClick={() => setStep(4)}>
@@ -495,35 +452,39 @@ export default function OutfitBuilderPage() {
             Select Shoes / Footwear
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            {shoes.map((shoe) => (
-              <Card
-                key={shoe.id}
-                onClick={() => {
-                  setSelectedShoe(shoe);
-                }}
-                className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 flex flex-col justify-between ${selectedShoe?.id === shoe.id ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
-                  }`}
-              >
-                {/* Colored garment illustration in this item's actual color(s) */}
-                <div className="flex items-center justify-center mb-4">
-                  <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-200 dark:border-blue-900/40">
-                    <GarmentIllustration category="shoe" colors={shoe.colors} size={48} />
-                  </div>
-                </div>
-
-                <CardTitle className="text-base font-extrabold text-slate-900 dark:text-white mb-3 line-clamp-2">{shoe.name}</CardTitle>
-
-                {/* BOTTOM: Formality Star Rating */}
-                <div className="pt-2 border-t border-slate-100 dark:border-zinc-800 flex items-center justify-between">
-                  <span className="text-xs text-slate-500 dark:text-zinc-400 font-semibold uppercase tracking-wider">Formality</span>
-                  <StarRating rating={shoe.formalityLevel} size="sm" />
-                </div>
-              </Card>
-            ))}
+            <GarmentChoiceCards items={shoes} selectedId={selectedShoe?.id} onSelect={(g) => { setSelectedShoe(g); setStep(7); }} category="shoe" accent="blue" />
           </div>
           <div className="flex justify-between pt-6">
             <Button variant="outline" onClick={() => setStep(5)}>
               <ArrowLeft className="w-4 h-4" /> Back to Trousers
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 7: Belt (optional) */}
+      {step === 7 && (
+        <div className="max-w-5xl mx-auto space-y-6 animate-fade-in">
+          <div className="text-center space-y-1">
+            <h2 className="text-2xl font-bold text-slate-900 dark:text-white">Add a Belt (Optional)</h2>
+            <p className="text-sm text-slate-500 dark:text-zinc-400">
+              Match the leather to your shoes — black with black, brown with brown.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            <Card
+              onClick={() => setSelectedBelt(null)}
+              className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-dashed border-2 border-slate-300 dark:border-zinc-700 flex flex-col items-center justify-center text-center ${selectedBelt === null ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
+                }`}
+            >
+              <CardTitle className="text-base font-bold text-slate-900 dark:text-white mb-1">No Belt</CardTitle>
+              <p className="text-xs text-slate-500 dark:text-zinc-400">Fine for t-shirts, polos and relaxed looks</p>
+            </Card>
+            <GarmentChoiceCards items={belts} selectedId={selectedBelt?.id} onSelect={setSelectedBelt} category="belt" accent="amber" />
+          </div>
+          <div className="flex justify-between pt-6">
+            <Button variant="outline" onClick={() => setStep(6)}>
+              <ArrowLeft className="w-4 h-4" /> Back to Shoes
             </Button>
             <Button
               onClick={calculateScore}
@@ -537,8 +498,8 @@ export default function OutfitBuilderPage() {
         </div>
       )}
 
-      {/* STEP 7: Outfit Score Results */}
-      {step === 7 && (
+      {/* STEP 8: Outfit Score Results */}
+      {step === 8 && (
         <div className="max-w-4xl mx-auto space-y-6 animate-fade-in">
           {loading ? (
             <Card className="p-12 text-center bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800">
@@ -546,23 +507,36 @@ export default function OutfitBuilderPage() {
               <h3 className="text-lg font-bold text-slate-900 dark:text-white">Calculating Outfit Compatibility...</h3>
               <p className="text-xs text-slate-500 dark:text-zinc-400 mt-1">Evaluating formality, color harmony, season, and occasion rules.</p>
             </Card>
+          ) : scoreError ? (
+            <Card className="p-8 text-center bg-white dark:bg-zinc-900 border-rose-200 dark:border-rose-900/50">
+              <p className="text-sm font-semibold text-rose-600 dark:text-rose-400">{scoreError}</p>
+              <Button variant="outline" size="sm" onClick={calculateScore} className="mt-4">
+                Try Again
+              </Button>
+            </Card>
           ) : scoreResult ? (
             <div className="space-y-6">
               <OutfitScoreDisplay
-                totalScore={typeof scoreResult?.totalScore === 'number' ? scoreResult.totalScore : 85}
-                breakdown={
-                  scoreResult?.breakdown || {
-                    colorHarmony: 25,
-                    garmentCompatibility: 20,
-                    occasionMatch: 12,
-                    seasonSuitability: 8,
-                    bodyTypeSuitability: 8,
-                    skinToneSuitability: 8,
-                  }
-                }
-                rating={scoreResult?.rating || 'Excellent Choice'}
-                suggestions={scoreResult?.suggestions || []}
+                totalScore={scoreResult.totalScore}
+                breakdown={scoreResult.breakdown}
+                dimensions={scoreResult.dimensions}
+                rating={scoreResult.rating}
+                suggestions={scoreResult.suggestions}
+                highlights={scoreResult.highlights}
               />
+              <p className="text-center text-xs text-slate-500 dark:text-zinc-400">
+                {scoreResult.personalization?.matchedOn.length ? (
+                  'Personalized with your saved Style Profile.'
+                ) : (
+                  <>
+                    Want this scored for your skin tone and body shape?{' '}
+                    <Link href="/style-advisor" className="font-semibold text-amber-700 dark:text-amber-400 underline">
+                      Create your Style Profile
+                    </Link>
+                    .
+                  </>
+                )}
+              </p>
 
               <div className="flex justify-center gap-4 pt-4">
                 <Button variant="outline" onClick={resetAll} size="lg">

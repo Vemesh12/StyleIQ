@@ -1,5 +1,7 @@
 // Prisma schema for StyleIQ - Men's Fashion Knowledge Platform
-// Database: PostgreSQL (via pgAdmin)
+// Database: PostgreSQL. Change it with `npx prisma migrate dev --name <change>`;
+// migrations live in prisma/migrations. Value ranges and allowed vocabularies
+// below are also enforced by CHECK constraints in the migrations.
 
 generator client {
   provider = "prisma-client-js"
@@ -29,14 +31,14 @@ model GarmentType {
 model Color {
   id        String  @id @default(cuid())
   name      String  @unique // 'Navy Blue'
-  hex       String  // '#1B2A4A'
+  hex       String // '#1B2A4A'
   slug      String  @unique
-  family    String  // 'Blue', 'Red', 'Neutral'
+  family    String // 'Blue', 'Red', 'Neutral'
   isNeutral Boolean @default(false)
 
-  garmentColors          GarmentColor[]
-  colorCompatibilityA    ColorCompatibilityRule[] @relation("ColorA")
-  colorCompatibilityB    ColorCompatibilityRule[] @relation("ColorB")
+  garmentColors       GarmentColor[]
+  colorCompatibilityA ColorCompatibilityRule[] @relation("ColorA")
+  colorCompatibilityB ColorCompatibilityRule[] @relation("ColorB")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -90,7 +92,7 @@ model Occasion {
   id             String @id @default(cuid())
   name           String @unique // 'Business Formal'
   slug           String @unique
-  formalityLevel Int    // 1-5
+  formalityLevel Int // 1-5
   description    String @default("")
 
   garmentOccasions GarmentOccasion[]
@@ -146,7 +148,7 @@ model SkinTone {
 
 model Garment {
   id             String      @id @default(cuid())
-  name           String      // 'Oxford Button-Down Shirt'
+  name           String // 'Oxford Button-Down Shirt'
   slug           String      @unique
   garmentType    GarmentType @relation(fields: [garmentTypeId], references: [id])
   garmentTypeId  String
@@ -169,9 +171,16 @@ model Garment {
   digitalWardrobes DigitalWardrobe[]
   savedOutfitItems SavedOutfitItem[]
 
+  // NULL = shared catalog item; otherwise a user's own item ("my navy
+  // chinos"), visible only to that user and never exported to prisma/data.
+  owner   User?   @relation("OwnedGarments", fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([garmentTypeId])
+  @@index([ownerId])
   @@map("garments")
 }
 
@@ -188,6 +197,7 @@ model GarmentColor {
   isPrimary Boolean @default(false)
 
   @@unique([garmentId, colorId])
+  @@index([colorId])
   @@map("garment_colors")
 }
 
@@ -236,6 +246,7 @@ model GarmentOccasion {
   suitability Int      @default(3) // 1-5
 
   @@unique([garmentId, occasionId])
+  @@index([occasionId])
   @@map("garment_occasions")
 }
 
@@ -248,6 +259,7 @@ model GarmentSeason {
   suitability Int     @default(3) // 1-5
 
   @@unique([garmentId, seasonId])
+  @@index([seasonId])
   @@map("garment_seasons")
 }
 
@@ -256,14 +268,15 @@ model GarmentSeason {
 // ============================================================
 
 model CompatibilityRule {
-  id                String @id @default(cuid())
+  id                String  @id @default(cuid())
   garmentA          Garment @relation("GarmentA", fields: [garmentAId], references: [id], onDelete: Cascade)
   garmentAId        String
   garmentB          Garment @relation("GarmentB", fields: [garmentBId], references: [id], onDelete: Cascade)
   garmentBId        String
-  rating            Float   // 1.0 to 5.0
+  rating            Float // 1.0 to 5.0
   reason            String  @default("")
-  compatibilityType String  @default("good") // 'excellent', 'good', 'acceptable', 'avoid'
+  // Derived from rating (see compatibilityTypeForRating): 'excellent' | 'good' | 'acceptable' | 'avoid'
+  compatibilityType String  @default("good")
 
   occasions RuleOccasion[]
   seasons   RuleSeason[]
@@ -272,6 +285,7 @@ model CompatibilityRule {
   updatedAt DateTime @updatedAt
 
   @@unique([garmentAId, garmentBId])
+  @@index([garmentBId])
   @@map("compatibility_rules")
 }
 
@@ -307,15 +321,16 @@ model ColorCompatibilityRule {
   colorAId String
   colorB   Color  @relation("ColorB", fields: [colorBId], references: [id], onDelete: Cascade)
   colorBId String
-  harmony  String // 'excellent', 'good', 'acceptable', 'avoid'
-  score    Int    // 0-10
-  ruleType String @default("neutral") // 'complementary', 'analogous', 'neutral', 'monochrome', 'contrast'
+  harmony  String // Display label, e.g. 'Neutral Anchor', 'Perfect Contrast', 'Clash'
+  score    Float // 0-10; below 6 counts as a clash
+  ruleType String @default("curated") // Free-form tag describing the pairing, e.g. 'autumn-formal'
   reason   String @default("")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([colorAId, colorBId])
+  @@index([colorBId])
   @@map("color_compatibility_rules")
 }
 
@@ -324,16 +339,16 @@ model ColorCompatibilityRule {
 // ============================================================
 
 model Guide {
-  id          String  @id @default(cuid())
-  title       String  // 'The Complete Business Casual Guide'
-  slug        String  @unique
-  category    String  @default("style") // 'occasion', 'style', 'body', 'season', 'accessory'
-  content     String  @default("") // Rich text / MDX content
-  excerpt     String  @default("")
-  seoTitle    String  @default("")
-  seoDesc     String  @default("")
-  published   Boolean @default(false)
-  imageUrl    String  @default("")
+  id        String  @id @default(cuid())
+  title     String // 'The Complete Business Casual Guide'
+  slug      String  @unique
+  category  String  @default("style") // 'style' | 'occasion' | 'body' | 'season' | 'accessory'
+  content   String  @default("") // Markdown (rendered by components/markdown-content.tsx)
+  excerpt   String  @default("")
+  seoTitle  String  @default("")
+  seoDesc   String  @default("")
+  published Boolean @default(false)
+  imageUrl  String  @default("")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -344,9 +359,9 @@ model Guide {
 model StyleRule {
   id          String @id @default(cuid())
   title       String // 'Never mix brown belt with black shoes'
-  ruleType    String @default("dos") // 'dos', 'donts', 'pro-tip'
+  ruleType    String @default("dos") // 'dos' | 'donts' | 'pro-tip'
   explanation String @default("")
-  category    String @default("general") // 'color', 'fit', 'occasion', 'accessory', 'general'
+  category    String @default("general") // 'general' | 'color' | 'fit' | 'occasion' | 'accessory'
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -371,29 +386,33 @@ model AdminUser {
 }
 
 // ============================================================
-// PERSONALIZATION ENGINE RULES (from recommendations.csv)
+// PERSONALIZATION ENGINE RULES
+// Generated by the seed from prisma/data/personalization.json: one row per
+// combination of the six inputs. Each advice column depends on one input
+// (colors/metal on underTone, fit/patterns/fabric on bodyProportion, shoes on
+// torsoLength).
 // ============================================================
 
 model PersonalizationRule {
-  id                                 String @id @default(cuid())
-  hairColor                          String
-  eyeColor                           String
-  skinTone                           String
-  underTone                          String
-  torsoLength                        String
-  bodyProportion                     String
-  recommendedClothingColors          String
-  avoidClothingColors                String
-  recommendedFittingStyle            String
-  recommendedMaterials               String
-  recommendedPatterns                String
-  recommendedJewelryMetal            String
-  recommendedShoes                   String
+  id                                  String @id @default(cuid())
+  hairColor                           String
+  eyeColor                            String
+  skinTone                            String
+  underTone                           String
+  torsoLength                         String
+  bodyProportion                      String
+  recommendedClothingColors           String
+  avoidClothingColors                 String
+  recommendedFittingStyle             String
+  recommendedMaterials                String
+  recommendedPatterns                 String
+  recommendedJewelryMetal             String
+  recommendedShoes                    String
   recommendedClothingColorWheelRegion String
-  avoidClothingColorWheelRegion      String
-  fabricNature                       String
-  dontExaggerate                     String
-  doExaggerate                       String
+  avoidClothingColorWheelRegion       String
+  fabricNature                        String
+  dontExaggerate                      String
+  doExaggerate                        String
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -407,13 +426,20 @@ model PersonalizationRule {
 // ============================================================
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  password  String   // hashed
-  name      String   @default("")
-  
+  id       String @id @default(cuid())
+  email    String @unique
+  password String // hashed
+  name     String @default("")
+
   wardrobe     DigitalWardrobe[]
   savedOutfits SavedOutfit[]
+  ownGarments  Garment[]         @relation("OwnedGarments")
+  wearLogs     WearLog[]
+  feedback     OutfitFeedback[]
+
+  // Style Advisor profile (hairColor, eyeColor, skinTone, underTone,
+  // torsoLength, bodyProportion), so personalization follows the account.
+  styleProfile Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -422,16 +448,17 @@ model User {
 }
 
 model DigitalWardrobe {
-  id        String   @id @default(cuid())
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String  @id @default(cuid())
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   userId    String
-  garment   Garment  @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garment   Garment @relation(fields: [garmentId], references: [id], onDelete: Cascade)
   garmentId String
-  quantity  Int      @default(1)
+  quantity  Int     @default(1)
 
-  addedAt   DateTime @default(now())
+  addedAt DateTime @default(now())
 
   @@unique([userId, garmentId])
+  @@index([garmentId])
   @@map("digital_wardrobe")
 }
 
@@ -443,21 +470,60 @@ model SavedOutfit {
   outfitScore Int               @default(80)
   items       SavedOutfitItem[]
 
-  createdAt   DateTime          @default(now())
+  createdAt DateTime @default(now())
 
+  @@index([userId, createdAt])
   @@map("saved_outfits")
 }
 
 model SavedOutfitItem {
-  id          String      @id @default(cuid())
-  outfit      SavedOutfit @relation(fields: [outfitId], references: [id], onDelete: Cascade)
-  outfitId    String
-  garment     Garment     @relation(fields: [garmentId], references: [id], onDelete: Cascade)
-  garmentId   String
-  layerOrder  Int         @default(1)
+  id         String      @id @default(cuid())
+  outfit     SavedOutfit @relation(fields: [outfitId], references: [id], onDelete: Cascade)
+  outfitId   String
+  garment    Garment     @relation(fields: [garmentId], references: [id], onDelete: Cascade)
+  garmentId  String
+  layerOrder Int         @default(1)
 
   @@unique([outfitId, garmentId])
+  @@index([garmentId])
   @@map("saved_outfit_items")
 }
 
+// ============================================================
+// WEAR HISTORY & FEEDBACK
+// ============================================================
 
+// "I wore this today" — powers the outfit calendar and keeps the daily
+// suggestion from repeating recently worn pieces. Garment ids are stored as
+// a plain list (not a relation) so history survives a garment being deleted.
+model WearLog {
+  id          String   @id @default(cuid())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  wornOn      DateTime @db.Date
+  garmentIds  String[]
+  outfitScore Int?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, wornOn])
+  @@map("wear_logs")
+}
+
+// Thumbs up / down on a suggested outfit. One vote per user per outfit
+// (outfitKey = sorted garment ids joined by "|"); used to re-rank that
+// user's future suggestions.
+model OutfitFeedback {
+  id         String   @id @default(cuid())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId     String
+  outfitKey  String
+  garmentIds String[]
+  rating     Int // 1 = like, -1 = dislike
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, outfitKey])
+  @@map("outfit_feedback")
+}

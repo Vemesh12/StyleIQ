@@ -1,70 +1,54 @@
-import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
+import { prisma } from '@/lib/prisma';
+import {
+  signSessionToken,
+  verifySessionToken,
+  ADMIN_COOKIE_NAME,
+  USER_COOKIE_NAME,
+  type SessionPayload,
+} from '@/lib/session-token';
 
-if (!process.env.JWT_SECRET) {
-  throw new Error(
-    'JWT_SECRET environment variable must be set. See .env.example for required configuration.'
-  );
-}
-
-const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET);
-
-const ADMIN_COOKIE_NAME = 'styleiq-admin-token';
-const USER_COOKIE_NAME = 'styleiq-user-token';
-
-export interface AdminSession {
-  id: string;
-  email: string;
-  name: string;
-}
-
-export type UserSession = AdminSession;
-
-async function signSession(payload: AdminSession, expiresIn: string): Promise<string> {
-  return new SignJWT({ ...payload })
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime(expiresIn)
-    .sign(JWT_SECRET);
-}
-
-async function verifySession(token: string): Promise<AdminSession | null> {
-  try {
-    const { payload } = await jwtVerify(token, JWT_SECRET);
-    return payload as unknown as AdminSession;
-  } catch {
-    return null;
-  }
-}
+export type AdminSession = SessionPayload;
+export type UserSession = SessionPayload;
 
 export async function createAdminToken(payload: AdminSession): Promise<string> {
-  return signSession(payload, '24h');
+  return signSessionToken(payload, 'admin', '24h');
 }
 
-export async function verifyAdminToken(token: string): Promise<AdminSession | null> {
-  return verifySession(token);
+export async function createUserToken(payload: UserSession): Promise<string> {
+  return signSessionToken(payload, 'user', '7d');
 }
 
+// Sessions are re-checked against the database on every call, so deleting an
+// admin/user account revokes their outstanding tokens immediately instead of
+// leaving them valid until expiry. Returned name/email are the current DB
+// values, not whatever was frozen into the token.
 export async function getAdminSession(): Promise<AdminSession | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(ADMIN_COOKIE_NAME)?.value;
   if (!token) return null;
-  return verifySession(token);
-}
 
-export async function createUserToken(payload: UserSession): Promise<string> {
-  return signSession(payload, '7d');
-}
+  const claims = await verifySessionToken(token, 'admin');
+  if (!claims) return null;
 
-export async function verifyUserToken(token: string): Promise<UserSession | null> {
-  return verifySession(token);
+  return prisma.adminUser.findUnique({
+    where: { id: claims.id },
+    select: { id: true, email: true, name: true },
+  });
 }
 
 export async function getUserSession(): Promise<UserSession | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(USER_COOKIE_NAME)?.value;
   if (!token) return null;
-  return verifySession(token);
+
+  const claims = await verifySessionToken(token, 'user');
+  if (!claims) return null;
+
+  return prisma.user.findUnique({
+    where: { id: claims.id },
+    select: { id: true, email: true, name: true },
+  });
 }
 
 export { ADMIN_COOKIE_NAME, USER_COOKIE_NAME };

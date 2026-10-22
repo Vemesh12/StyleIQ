@@ -7,7 +7,8 @@ export interface WeatherInfo {
   weatherCode: number;
   description: string;
   isRainy: boolean;
-  seasonProfile: 'light' | 'heavy' | 'all';
+  // Season slug matching the `seasons` table (spring/summer/monsoon/autumn/winter).
+  seasonSlug: string;
 }
 
 // WMO weather codes -> plain-language description.
@@ -24,10 +25,29 @@ function describeWeatherCode(code: number): { description: string; isRainy: bool
   return { description: 'unsettled', isRainy: false };
 }
 
-function seasonProfileFor(tempC: number): 'light' | 'heavy' | 'all' {
-  if (tempC >= 24) return 'light';
-  if (tempC <= 14) return 'heavy';
-  return 'all';
+/**
+ * Season for a place and day. Uses the calendar season for the hemisphere
+ * (so mild days map to spring/autumn instead of "no season"), lets clearly
+ * hot or cold temperatures override it, and uses temperature + rain in the
+ * tropics where calendar seasons don't apply.
+ */
+export function seasonFor(lat: number, tempC: number, isRainy: boolean, date = new Date()): string {
+  if (Math.abs(lat) < 23.5) {
+    if (isRainy && tempC >= 22) return 'monsoon';
+    if (tempC >= 26) return 'summer';
+    if (tempC <= 15) return 'winter';
+    return 'spring';
+  }
+
+  if (tempC >= 28) return 'summer';
+  if (tempC <= 5) return 'winter';
+
+  // Meteorological seasons, shifted six months for the southern hemisphere.
+  const month = (date.getUTCMonth() + (lat < 0 ? 6 : 0)) % 12; // 0 = Jan
+  if (month <= 1 || month === 11) return 'winter';
+  if (month <= 4) return 'spring';
+  if (month <= 7) return 'summer';
+  return 'autumn';
 }
 
 export async function getWeatherForCoords(lat: number, lon: number): Promise<WeatherInfo | null> {
@@ -42,7 +62,7 @@ export async function getWeatherForCoords(lat: number, lon: number): Promise<Wea
     if (typeof tempC !== 'number' || typeof weatherCode !== 'number') return null;
 
     const { description, isRainy } = describeWeatherCode(weatherCode);
-    return { tempC, weatherCode, description, isRainy, seasonProfile: seasonProfileFor(tempC) };
+    return { tempC, weatherCode, description, isRainy, seasonSlug: seasonFor(lat, tempC, isRainy) };
   } catch (error) {
     console.error('Error fetching weather:', error);
     return null;

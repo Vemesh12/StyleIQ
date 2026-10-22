@@ -9,7 +9,7 @@ export async function GET(
   const { searchParams } = new URL(request.url);
   const typeFilter = searchParams.get('type');
 
-  const garment = await prisma.garment.findUnique({ where: { slug } });
+  const garment = await prisma.garment.findFirst({ where: { slug, ownerId: null } });
   if (!garment) {
     return NextResponse.json({ error: 'Garment not found' }, { status: 404 });
   }

@@ -1,12 +1,28 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { GarmentCard } from '@/components/garment-card';
 import { GarmentIllustration } from '@/components/garment-illustration';
 import { AuthModal } from '@/components/auth-modal';
+import { loadStyleProfile } from '@/lib/style-profile';
+import { readGuestWardrobe, readGuestWearLog, writeGuestWardrobe } from '@/lib/guest-wardrobe';
+import { OutfitActions } from '@/components/outfit-actions';
+import { OutfitPieces, piecesOf } from '@/components/outfit-pieces';
+import { CompleteOutfit } from './complete-outfit';
+import { ClosetGaps } from './closet-gaps';
+import { CustomGarmentForm } from './custom-garment-form';
+import { WearHistory } from './wear-history';
+import {
+  loadWardrobeData,
+  type AllGarment,
+  type DailySuggestion,
+  type SavedOutfitRow,
+  type WardrobeData,
+  type WardrobeItem,
+} from './wardrobe-data';
 import Link from 'next/link';
 import {
   FolderHeart,
@@ -21,82 +37,9 @@ import {
   CloudRain,
   Sparkles,
   Bookmark,
+  CalendarDays,
 } from 'lucide-react';
 
-interface DailyOutfitItem {
-  id: string;
-  name: string;
-  slug?: string;
-  colors: { name: string; hex: string }[];
-}
-
-interface SavedOutfitRow {
-  id: string;
-  name: string;
-  outfitScore: number;
-  createdAt: string;
-  items: {
-    id: string;
-    layerOrder: number;
-    garment: {
-      id: string;
-      name: string;
-      slug: string;
-      garmentType: { name: string; slug: string };
-      colors: { color: { name: string; hex: string } }[];
-    };
-  }[];
-}
-
-interface DailySuggestion {
-  weather: { tempC: number; description: string; isRainy: boolean } | null;
-  outfit: { score: number; shirt: DailyOutfitItem; trouser: DailyOutfitItem; shoe: DailyOutfitItem } | null;
-  message: string | null;
-}
-
-// Both the authenticated wardrobe API (nested Prisma `{ color: {...} }` join
-// rows, `garmentType` as an object) and the guest-mode path (flat `{name,
-// hex}` colors and a plain `garmentType` string, both from /api/garments)
-// are normalized to this same shape at fetch time, so rendering code never
-// has to know which source a wardrobe item came from.
-interface WardrobeItem {
-  id: string;
-  garmentId: string;
-  quantity: number;
-  garment: {
-    id: string;
-    name: string;
-    slug: string;
-    formalityLevel: number;
-    garmentType: string;
-    colors: { name: string; hex: string }[];
-  };
-}
-
-interface AllGarment {
-  id: string;
-  name: string;
-  slug: string;
-  formalityLevel: number;
-  garmentType: string;
-  colors: { name: string; hex: string }[];
-}
-
-interface RawWardrobeRow {
-  id: string;
-  garmentId: string;
-  quantity: number;
-  garment: {
-    id: string;
-    name: string;
-    slug: string;
-    formalityLevel: number;
-    garmentType: { name: string; slug: string };
-    colors: { color: { name: string; hex: string } }[];
-  };
-}
-
-const LOCAL_STORAGE_KEY = 'styleiq_guest_wardrobe_ids';
 
 export default function DigitalWardrobePage() {
   const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([]);
@@ -110,7 +53,7 @@ export default function DigitalWardrobePage() {
   const [dailyLoading, setDailyLoading] = useState(false);
   const [dailyError, setDailyError] = useState<string | null>(null);
   const [savedOutfits, setSavedOutfits] = useState<SavedOutfitRow[]>([]);
-  const [activeTab, setActiveTab] = useState<'inventory' | 'savedOutfits'>('inventory');
+  const [activeTab, setActiveTab] = useState<'inventory' | 'savedOutfits' | 'history'>('inventory');
 
   const handleDeleteOutfit = async (id: string) => {
     if (!confirm('Are you sure you want to delete this saved outfit?')) return;
@@ -122,76 +65,40 @@ export default function DigitalWardrobePage() {
     }
   };
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const applyData = useCallback((data: WardrobeData) => {
+    setIsLoggedIn(data.isLoggedIn);
+    setWardrobe(data.wardrobe);
+    setAllGarments(data.allGarments);
+    setSavedOutfits(data.savedOutfits);
+    setLoadError(null);
+  }, []);
+
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [wRes, gRes, oRes] = await Promise.all([
-        fetch('/api/user/wardrobe'),
-        fetch('/api/garments?limit=500'),
-        fetch('/api/user/outfits'),
-      ]);
-
-      let loadedGarments: AllGarment[] = [];
-      if (gRes.ok) {
-        const gData = await gRes.json();
-        loadedGarments = gData.garments || [];
-        setAllGarments(loadedGarments);
-      }
-
-      if (oRes.ok) {
-        const oData = await oRes.json();
-        setSavedOutfits(oData);
-      }
-
-      if (wRes.ok) {
-        setIsLoggedIn(true);
-        const wData: RawWardrobeRow[] = await wRes.json();
-        const normalized: WardrobeItem[] = wData.map((w) => ({
-          id: w.id,
-          garmentId: w.garmentId,
-          quantity: w.quantity,
-          garment: {
-            ...w.garment,
-            garmentType: w.garment.garmentType.name,
-            colors: w.garment.colors.map((gc) => ({ name: gc.color.name, hex: gc.color.hex })),
-          },
-        }));
-        setWardrobe(normalized);
-      } else {
-        setIsLoggedIn(false);
-        const guestIds: string[] = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]');
-        
-        const guestItems: WardrobeItem[] = guestIds
-          .map((id) => {
-            const garment = loadedGarments.find((g) => g.id === id);
-            if (!garment) return null;
-            return {
-              id: `guest_${garment.id}`,
-              garmentId: garment.id,
-              quantity: 1,
-              garment: {
-                id: garment.id,
-                name: garment.name,
-                slug: garment.slug,
-                formalityLevel: garment.formalityLevel,
-                garmentType: garment.garmentType,
-                colors: garment.colors,
-              },
-            };
-          })
-          .filter(Boolean) as WardrobeItem[];
-
-        setWardrobe(guestItems);
-      }
+      applyData(await loadWardrobeData());
     } catch (error) {
       console.error('Error fetching wardrobe data:', error);
+      setLoadError('Could not load your closet. Check your connection and refresh.');
     }
     setLoading(false);
   };
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    let active = true;
+    loadWardrobeData()
+      .then((data) => active && applyData(data))
+      .catch((error) => {
+        console.error('Error fetching wardrobe data:', error);
+        if (active) setLoadError('Could not load your closet. Check your connection and refresh.');
+      })
+      .finally(() => active && setLoading(false));
+    return () => {
+      active = false;
+    };
+  }, [applyData]);
 
   const handleAddGarment = async (garmentId: string) => {
     setAddingId(garmentId);
@@ -207,17 +114,17 @@ export default function DigitalWardrobePage() {
         console.error(e);
       }
     } else {
-      const guestIds: string[] = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]');
-      if (!guestIds.includes(garmentId)) {
-        guestIds.push(garmentId);
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(guestIds));
-      }
+      writeGuestWardrobe([...readGuestWardrobe(), garmentId]);
       await fetchData();
     }
     setAddingId(null);
   };
 
-  const getTodaysOutfit = () => {
+  const [dailyVariant, setDailyVariant] = useState(0);
+
+  // variant 0 = today's pick; "Try Another" asks for the next distinct option.
+  const getTodaysOutfit = (variant = 0) => {
+    setDailyVariant(variant);
     setDailyLoading(true);
     setDailyError(null);
     setDailySuggestion(null);
@@ -228,7 +135,16 @@ export default function DigitalWardrobePage() {
       fetch('/api/wardrobe/daily-suggestion', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ garmentIds, lat, lon }),
+        body: JSON.stringify({
+          garmentIds,
+          lat,
+          lon,
+          // Local calendar date, so the suggestion rotates at the user's midnight.
+          localDate: new Date().toLocaleDateString('en-CA'),
+          variant,
+          profile: loadStyleProfile() ?? undefined,
+          recentlyWorn: isLoggedIn ? undefined : readGuestWearLog(),
+        }),
       })
         .then((res) => res.json())
         .then((data) => {
@@ -250,10 +166,11 @@ export default function DigitalWardrobePage() {
     }
   };
 
-  const handleRemoveGarment = async (garmentId: string) => {
+  const handleRemoveGarment = async (garmentId: string, isOwn = false) => {
+    if (isOwn && !confirm('Delete this item? It was added by you, so it will be removed from your closet and saved outfits.')) return;
     if (isLoggedIn) {
       try {
-        const res = await fetch(`/api/user/wardrobe?garmentId=${garmentId}`, {
+        const res = await fetch(isOwn ? `/api/user/garments?id=${garmentId}` : `/api/user/wardrobe?garmentId=${garmentId}`, {
           method: 'DELETE',
         });
         if (res.ok) await fetchData();
@@ -261,9 +178,7 @@ export default function DigitalWardrobePage() {
         console.error(e);
       }
     } else {
-      const guestIds: string[] = JSON.parse(localStorage.getItem(LOCAL_STORAGE_KEY) || '[]');
-      const filtered = guestIds.filter((id) => id !== garmentId);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(filtered));
+      writeGuestWardrobe(readGuestWardrobe().filter((id) => id !== garmentId));
       await fetchData();
     }
   };
@@ -277,6 +192,12 @@ export default function DigitalWardrobePage() {
 
   return (
     <div className="w-full px-4 sm:px-8 lg:px-12 py-12 bg-slate-50 dark:bg-zinc-950 min-h-screen transition-colors duration-300">
+      {loadError && (
+        <p className="mb-6 text-sm font-medium text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-xl px-4 py-3">
+          {loadError}
+        </p>
+      )}
+
       {/* Guest Mode Info Banner */}
       {!isLoggedIn && (
         <div className="mb-6 p-4 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs">
@@ -306,7 +227,7 @@ export default function DigitalWardrobePage() {
                     We&apos;ll pick an outfit from clothes you already own, matched to today&apos;s weather.
                   </p>
                 </div>
-                <Button onClick={getTodaysOutfit} size="lg" className="shrink-0">
+                <Button onClick={() => getTodaysOutfit(0)} size="lg" className="shrink-0">
                   <Sparkles className="w-4 h-4" /> Show Me What to Wear
                 </Button>
               </div>
@@ -334,32 +255,20 @@ export default function DigitalWardrobePage() {
                       <span className="text-slate-500 dark:text-zinc-400">Weather unavailable — picked from your closet anyway.</span>
                     )}
                   </div>
-                  <Button variant="outline" size="sm" onClick={getTodaysOutfit}>
+                  <Button variant="outline" size="sm" onClick={() => getTodaysOutfit(dailyVariant + 1)}>
                     Try Another
                   </Button>
                 </div>
 
                 {dailySuggestion.outfit ? (
-                  <div className="flex flex-wrap gap-4">
-                    {[
-                      { category: 'shirt', item: dailySuggestion.outfit.shirt },
-                      { category: 'trouser', item: dailySuggestion.outfit.trouser },
-                      { category: 'shoe', item: dailySuggestion.outfit.shoe },
-                    ].map(({ category, item }) => (
-                      <Link
-                        key={item.id}
-                        href={item.slug ? `/encyclopedia/${item.slug}` : '/encyclopedia'}
-                        className="flex items-center gap-3 bg-white dark:bg-zinc-900 rounded-xl p-3 border border-slate-200 dark:border-zinc-800 shadow-2xs hover:border-amber-500 transition-colors group"
-                      >
-                        <GarmentIllustration category={category} colors={item.colors} size={40} />
-                        <div>
-                          <span className="text-sm font-bold text-slate-900 dark:text-white max-w-40 block group-hover:text-amber-600 transition-colors">
-                            {item.name}
-                          </span>
-                          <span className="text-[10px] text-slate-400 dark:text-zinc-500">View details →</span>
-                        </div>
-                      </Link>
-                    ))}
+                  <div className="space-y-3">
+                    <OutfitPieces pieces={piecesOf(dailySuggestion.outfit)} />
+                    <OutfitActions
+                      key={piecesOf(dailySuggestion.outfit).map((p) => p.id).join('|')}
+                      garmentIds={piecesOf(dailySuggestion.outfit).map((p) => p.id)}
+                      score={dailySuggestion.outfit.score}
+                      onRequireLogin={() => setAuthModalOpen(true)}
+                    />
                   </div>
                 ) : (
                   <p className="text-sm text-slate-600 dark:text-zinc-400">{dailySuggestion.message}</p>
@@ -368,6 +277,13 @@ export default function DigitalWardrobePage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {!loading && wardrobe.length > 0 && (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 mb-10">
+          <CompleteOutfit wardrobe={wardrobe} isLoggedIn={isLoggedIn} onRequireLogin={() => setAuthModalOpen(true)} />
+          <ClosetGaps garmentIds={wardrobe.map((w) => w.garmentId)} />
+        </div>
       )}
 
       {/* Header */}
@@ -389,6 +305,20 @@ export default function DigitalWardrobePage() {
             {showAddModal ? 'Hide Add Window' : 'Add Clothes to Closet'}
           </Button>
         </div>
+      </div>
+
+      <div className="mb-8">
+        {isLoggedIn ? (
+          <CustomGarmentForm onCreated={fetchData} />
+        ) : (
+          <p className="text-sm text-slate-500 dark:text-zinc-400">
+            Own something that isn&apos;t in the catalog?{' '}
+            <button onClick={() => setAuthModalOpen(true)} className="font-semibold text-amber-700 dark:text-amber-400 underline">
+              Sign in
+            </button>{' '}
+            to add your own items.
+          </p>
+        )}
       </div>
 
       {/* Add Clothes Selection Window */}
@@ -481,7 +411,20 @@ export default function DigitalWardrobePage() {
         >
           <Bookmark className="w-4 h-4" /> Saved Looks ({savedOutfits.length})
         </button>
+        <button
+          onClick={() => setActiveTab('history')}
+          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold transition-all cursor-pointer ${
+            activeTab === 'history'
+              ? 'bg-amber-600 text-white shadow-md'
+              : 'text-slate-600 dark:text-zinc-400 hover:bg-slate-100 dark:hover:bg-zinc-800'
+          }`}
+        >
+          <CalendarDays className="w-4 h-4" /> History
+        </button>
       </div>
+
+      {/* VIEW: Wear history (outfit calendar) */}
+      {activeTab === 'history' && <WearHistory isLoggedIn={isLoggedIn} allGarments={allGarments} />}
 
       {/* VIEW: Saved Outfits */}
       {activeTab === 'savedOutfits' && (
@@ -512,27 +455,34 @@ export default function DigitalWardrobePage() {
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-slate-100 dark:border-zinc-800">
-                    {outfit.items.map((item) => (
-                      <Link
-                        key={item.id}
-                        href={`/encyclopedia/${item.garment.slug}`}
-                        className="flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-800/60 border border-slate-200/80 dark:border-zinc-700/60 hover:border-amber-500 transition-colors group"
-                      >
-                        <GarmentIllustration
-                          category={item.garment.garmentType.slug}
-                          colors={item.garment.colors.map((c) => ({ name: c.color.name, hex: c.color.hex }))}
-                          size={36}
-                        />
-                        <div className="min-w-0">
-                          <span className="text-xs font-semibold text-slate-900 dark:text-white group-hover:text-amber-600 truncate block">
-                            {item.garment.name}
-                          </span>
-                          <span className="text-[10px] text-slate-400 dark:text-zinc-500">
-                            {item.garment.garmentType.name}
-                          </span>
-                        </div>
-                      </Link>
-                    ))}
+                    {outfit.items.map((item) => {
+                      const body = (
+                        <>
+                          <GarmentIllustration
+                            category={item.garment.garmentType.slug}
+                            colors={item.garment.colors.map((c) => ({ name: c.color.name, hex: c.color.hex }))}
+                            size={36}
+                          />
+                          <div className="min-w-0">
+                            <span className="text-xs font-semibold text-slate-900 dark:text-white group-hover:text-amber-600 truncate block">
+                              {item.garment.name}
+                            </span>
+                            <span className="text-[10px] text-slate-400 dark:text-zinc-500">
+                              {item.garment.ownerId ? 'Your item' : item.garment.garmentType.name}
+                            </span>
+                          </div>
+                        </>
+                      );
+                      const className =
+                        'flex items-center gap-2.5 p-2.5 rounded-xl bg-slate-50 dark:bg-zinc-800/60 border border-slate-200/80 dark:border-zinc-700/60 transition-colors group';
+                      return item.garment.ownerId ? (
+                        <div key={item.id} className={className}>{body}</div>
+                      ) : (
+                        <Link key={item.id} href={`/encyclopedia/${item.garment.slug}`} className={`${className} hover:border-amber-500`}>
+                          {body}
+                        </Link>
+                      );
+                    })}
                   </div>
                 </Card>
               ))}
@@ -584,11 +534,14 @@ export default function DigitalWardrobePage() {
                             garmentType={item.garment.garmentType}
                             formalityLevel={item.garment.formalityLevel}
                             colors={item.garment.colors}
+                            linkable={!item.garment.isOwn}
+                            badge={item.garment.isOwn ? 'Your item' : undefined}
                           />
                           <button
-                            onClick={() => handleRemoveGarment(item.garmentId)}
-                            className="absolute top-3 right-3 p-2 rounded-lg bg-red-600 text-white opacity-0 group-hover:opacity-100 hover:bg-red-700 transition-all shadow-md cursor-pointer"
-                            title="Remove from closet"
+                            onClick={() => handleRemoveGarment(item.garmentId, item.garment.isOwn)}
+                            className="absolute top-3 right-3 p-2 rounded-lg bg-red-600 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-red-700 transition-all shadow-md cursor-pointer"
+                            title={item.garment.isOwn ? 'Delete your item' : 'Remove from closet'}
+                            aria-label={`${item.garment.isOwn ? 'Delete' : 'Remove'} ${item.garment.name}`}
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>

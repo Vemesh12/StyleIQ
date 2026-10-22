@@ -3,18 +3,18 @@ import { createUserToken, USER_COOKIE_NAME } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { registerSchema } from '@/lib/validation';
-import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
   try {
-    const rateLimitKey = `register:${getClientIp(request)}`;
-    const { allowed, retryAfterSeconds } = checkRateLimit(rateLimitKey, 5, 15 * 60 * 1000);
-    if (!allowed) {
-      return NextResponse.json(
-        { error: 'Too many registration attempts. Please try again later.' },
-        { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } }
-      );
-    }
+    // Registration necessarily reveals whether an email is taken (there is no
+    // email-verification flow to hide it behind), so the defence here is a
+    // tight per-IP limit that makes bulk email probing slow.
+    const limited = await enforceRateLimits(
+      [{ key: `register:${getClientIp(request)}`, limit: 5, windowMs: 15 * 60 * 1000 }],
+      'Too many registration attempts. Please try again later.'
+    );
+    if (limited) return limited;
 
     const body = await request.json();
     const parsed = registerSchema.safeParse(body);
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
 
     const existing = await prisma.user.findUnique({ where: { email } });
     if (existing) {
-      return NextResponse.json({ error: 'User already exists with this email' }, { status: 400 });
+      return NextResponse.json({ error: 'An account with this email already exists. Try signing in instead.' }, { status: 409 });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);

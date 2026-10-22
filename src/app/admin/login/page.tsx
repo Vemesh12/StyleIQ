@@ -57,7 +57,7 @@ export default function AdminLoginPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@styleiq.com"
+                placeholder="you@example.com"
                 required
               />
             </div>
@@ -78,9 +78,6 @@ export default function AdminLoginPage() {
               {loading ? 'Logging in...' : 'Login'}
             </Button>
           </form>
-          <p className="text-xs text-zinc-600 text-center mt-4">
-            Default: admin@styleiq.com / admin123
-          </p>
         </CardContent>
       </Card>
     </div>

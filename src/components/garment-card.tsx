@@ -38,6 +38,9 @@ interface GarmentCardProps {
   rating?: number;
   compatibilityType?: string;
   reason?: string;
+  // false for items without a public encyclopedia page (a user's own items)
+  linkable?: boolean;
+  badge?: string;
 }
 
 export function GarmentCard({
@@ -49,11 +52,12 @@ export function GarmentCard({
   rating,
   compatibilityType,
   reason,
+  linkable = true,
+  badge,
 }: GarmentCardProps) {
   const styleClass = gradientForType(garmentType);
 
-  return (
-    <Link href={`/encyclopedia/${slug}`}>
+  const card = (
       <Card className="group hover:border-amber-500/50 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden h-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 flex flex-col justify-between">
         {/* Header: colored garment illustration in the item's actual color(s) */}
         <div className={`h-28 bg-gradient-to-br ${styleClass} p-4 flex items-center justify-center relative overflow-hidden border-b`}>
@@ -61,6 +65,11 @@ export function GarmentCard({
             <GarmentIllustration category={garmentType} colors={colors} size={56} />
           </div>
 
+          {badge && (
+            <div className="absolute top-2 left-2">
+              <Badge variant="outline" className="bg-white/90 dark:bg-zinc-950/80 text-xs">{badge}</Badge>
+            </div>
+          )}
           {compatibilityType && (
             <div className="absolute top-2 right-2">
               <Badge variant={compatibilityType as 'excellent' | 'good' | 'acceptable' | 'avoid'}>
@@ -100,6 +109,6 @@ export function GarmentCard({
           )}
         </div>
       </Card>
-    </Link>
   );
+  return linkable ? <Link href={`/encyclopedia/${slug}`}>{card}</Link> : card;
 }

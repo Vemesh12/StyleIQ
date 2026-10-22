@@ -21,7 +21,7 @@ export const revalidate = 60;
 export default async function HomePage() {
   const [garmentCount, ruleCount, colorRuleCount, guideCount, featuredRules, featuredGuides] =
     await Promise.all([
-      prisma.garment.count(),
+      prisma.garment.count({ where: { ownerId: null } }),
       prisma.compatibilityRule.count(),
       prisma.colorCompatibilityRule.count(),
       prisma.guide.count({ where: { published: true } }),

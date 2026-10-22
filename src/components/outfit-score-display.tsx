@@ -13,8 +13,12 @@ interface OutfitScoreDisplayProps {
     bodyTypeSuitability: number;
     skinToneSuitability: number;
   };
+  // Which dimensions actually counted. Dimensions that don't apply (no
+  // occasion picked, no profile saved) are left out of the total entirely.
+  dimensions?: Record<string, { score: number; max: number; applied: boolean; note?: string }>;
   rating: string;
   suggestions?: string[];
+  highlights?: string[];
   className?: string;
 }
 
@@ -30,8 +34,10 @@ const dimensionLabels: Record<string, { label: string; max: number; color: strin
 export function OutfitScoreDisplay({
   totalScore,
   breakdown,
+  dimensions,
   rating,
   suggestions = [],
+  highlights = [],
   className,
 }: OutfitScoreDisplayProps) {
   const safeTotalScore = Number.isNaN(Number(totalScore)) ? 0 : Number(totalScore);
@@ -109,6 +115,18 @@ export function OutfitScoreDisplay({
         {Object.entries(breakdown).map(([key, value]) => {
           const dim = dimensionLabels[key];
           if (!dim) return null;
+          const detail = dimensions?.[key];
+          if (detail && !detail.applied) {
+            return (
+              <div key={key} className="space-y-1 opacity-70">
+                <div className="flex justify-between text-sm">
+                  <span className="text-slate-500 dark:text-zinc-500 font-medium">{dim.label}</span>
+                  <span className="text-xs text-slate-500 dark:text-zinc-500 font-semibold">Not included</span>
+                </div>
+                {detail.note && <p className="text-xs text-slate-500 dark:text-zinc-500">{detail.note}</p>}
+              </div>
+            );
+          }
           const percentage = (value / dim.max) * 100;
           return (
             <div key={key} className="space-y-1">
@@ -124,10 +142,24 @@ export function OutfitScoreDisplay({
                   style={{ width: `${percentage}%` }}
                 />
               </div>
+              {detail?.note && <p className="text-xs text-slate-500 dark:text-zinc-400">{detail.note}</p>}
             </div>
           );
         })}
       </div>
+
+      {highlights.length > 0 && (
+        <div className="w-full max-w-md p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/25 border border-emerald-200 dark:border-emerald-900/40">
+          <h4 className="text-sm font-bold text-emerald-900 dark:text-emerald-300 mb-2">What works</h4>
+          <ul className="space-y-1">
+            {highlights.map((h, i) => (
+              <li key={i} className="text-sm text-emerald-800 dark:text-emerald-200/90">
+                {h}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Suggestions */}
       {suggestions.length > 0 && (

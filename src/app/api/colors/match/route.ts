@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
+import { colorMatchSchema } from '@/lib/validation';
+import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
+import { cached } from '@/lib/ttl-cache';
+import { colorPairScore } from '@/lib/rule-engine/color-rules';
+import { loadCatalog, loadRuleLookups, ENGINE_CACHE_PREFIX } from '@/lib/rule-engine/catalog';
 
 interface RgbColor {
   r: number;
@@ -9,138 +14,106 @@ interface RgbColor {
 
 function hexToRgb(hex: string): RgbColor {
   const clean = hex.replace('#', '').trim();
-  const full = clean.length === 3
-    ? clean.split('').map((c) => c + c).join('')
-    : clean;
+  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean;
   const num = parseInt(full, 16);
-  return {
-    r: (num >> 16) & 255,
-    g: (num >> 8) & 255,
-    b: num & 255,
-  };
+  return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
 }
 
-// Perceptually weighted Euclidean RGB color distance
+// Perceptually weighted Euclidean RGB color distance ("redmean").
 function colorDistance(c1: RgbColor, c2: RgbColor): number {
   const rmean = (c1.r + c2.r) / 2;
   const r = c1.r - c2.r;
   const g = c1.g - c2.g;
   const b = c1.b - c2.b;
-  return Math.sqrt(
-    (((512 + rmean) * r * r) >> 8) +
-    4 * g * g +
-    (((767 - rmean) * b * b) >> 8)
-  );
+  return Math.sqrt((((512 + rmean) * r * r) >> 8) + 4 * g * g + (((767 - rmean) * b * b) >> 8));
 }
+
+const MAX_DISTANCE = colorDistance({ r: 0, g: 0, b: 0 }, { r: 255, g: 255, b: 255 });
+
+const loadPalette = () => cached(`${ENGINE_CACHE_PREFIX}palette`, 5 * 60 * 1000, () => prisma.color.findMany());
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { hex } = body;
+    const limited = await enforceRateLimits([
+      { key: `color-match:${getClientIp(request)}`, limit: 30, windowMs: 60 * 1000 },
+    ]);
+    if (limited) return limited;
 
-    if (!hex || typeof hex !== 'string') {
-      return NextResponse.json({ error: 'Valid hex color is required' }, { status: 400 });
+    const parsed = colorMatchSchema.safeParse(await request.json());
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
+    const hex = parsed.data.hex.startsWith('#') ? parsed.data.hex : `#${parsed.data.hex}`;
 
-    const inputRgb = hexToRgb(hex);
-
-    // Fetch all colors in database
-    const allColors = await prisma.color.findMany();
-    if (!allColors.length) {
+    const [palette, lookups, catalog] = await Promise.all([loadPalette(), loadRuleLookups(), loadCatalog()]);
+    if (!palette.length) {
       return NextResponse.json({ error: 'No palette colors found' }, { status: 500 });
     }
 
-    // Rank database colors by closeness
-    const scoredColors = allColors.map((color) => {
-      const dbRgb = hexToRgb(color.hex);
-      const dist = colorDistance(inputRgb, dbRgb);
-      // Max possible distance is ~765
-      const confidence = Math.max(1, Math.min(100, Math.round(100 - (dist / 765) * 100)));
-      return {
-        ...color,
-        distance: dist,
-        confidence,
-      };
+    // Rank palette colors by closeness to the scanned color.
+    const inputRgb = hexToRgb(hex);
+    const scored = palette
+      .map((color) => {
+        const distance = colorDistance(inputRgb, hexToRgb(color.hex));
+        const confidence = Math.max(1, Math.min(100, Math.round(100 - (distance / MAX_DISTANCE) * 100)));
+        return { ...color, distance, confidence };
+      })
+      .sort((a, b) => a.distance - b.distance);
+    const bestMatch = scored[0];
+    const alternatives = scored.slice(1, 4);
+
+    // Score the matched color against EVERY palette color — curated rule when
+    // one exists, color-wheel math otherwise — instead of only the handful of
+    // curated rules (which left most scanned colors with no pairings at all).
+    const pairings = palette
+      .filter((c) => c.id !== bestMatch.id)
+      .map((partner) => ({ partner, result: colorPairScore(bestMatch, partner, lookups.colors) }));
+
+    const toHarmony = ({ partner, result }: (typeof pairings)[number]) => ({
+      color: { id: partner.id, name: partner.name, hex: partner.hex, family: partner.family },
+      harmony: result.harmony,
+      score: result.pairScore,
+      ruleType: result.ruleType,
+      reason: result.reason,
     });
 
-    scoredColors.sort((a, b) => a.distance - b.distance);
-    const bestMatch = scoredColors[0];
-    const alternatives = scoredColors.slice(1, 4);
+    // Best pairings, with variety: at most 2 per harmony type so the list
+    // isn't six near-identical neutral anchors.
+    const perType: Record<string, number> = {};
+    const harmonies = pairings
+      .filter((p) => !p.result.isClash && p.result.pairScore >= 7.5)
+      .sort((a, b) => b.result.pairScore - a.result.pairScore)
+      .filter((p) => {
+        const n = perType[p.result.harmony] ?? 0;
+        if (n >= 2) return false;
+        perType[p.result.harmony] = n + 1;
+        return true;
+      })
+      .slice(0, 8)
+      .map(toHarmony);
 
-    // Query color compatibility rules for best match
-    const rules = await prisma.colorCompatibilityRule.findMany({
-      where: {
-        OR: [
-          { colorAId: bestMatch.id },
-          { colorBId: bestMatch.id },
-        ],
-      },
-      include: {
-        colorA: true,
-        colorB: true,
-      },
-      orderBy: { score: 'desc' },
-    });
+    const avoidHarmonies = pairings
+      .filter((p) => p.result.isClash)
+      .sort((a, b) => a.result.pairScore - b.result.pairScore)
+      .slice(0, 6)
+      .map(toHarmony);
 
-    const recommendedColorIds = new Set<string>();
-    const harmonies = rules
-      .filter((r) => r.harmony !== 'avoid' && r.score >= 6)
-      .map((r) => {
-        const partner = r.colorAId === bestMatch.id ? r.colorB : r.colorA;
-        recommendedColorIds.add(partner.id);
-        return {
-          color: partner,
-          harmony: r.harmony,
-          score: r.score,
-          ruleType: r.ruleType,
-          reason: r.reason,
-        };
-      });
-
-    const avoidHarmonies = rules
-      .filter((r) => r.harmony === 'avoid' || r.score < 5)
-      .map((r) => {
-        const partner = r.colorAId === bestMatch.id ? r.colorB : r.colorA;
-        return {
-          color: partner,
-          harmony: r.harmony,
-          score: r.score,
-          ruleType: r.ruleType,
-          reason: r.reason,
-        };
-      });
-
-    // Query actual garments featuring recommended pairing colors
-    const partnerColorIdsArray = Array.from(recommendedColorIds);
-    const matchingGarments = await prisma.garment.findMany({
-      where: {
-        colors: {
-          some: {
-            colorId: { in: partnerColorIdsArray.length ? partnerColorIdsArray : [bestMatch.id] },
-          },
-        },
-      },
-      include: {
-        garmentType: true,
-        colors: {
-          include: { color: true },
-        },
-      },
-      take: 8,
-    });
-
-    const transformedGarments = matchingGarments.map((g) => ({
-      id: g.id,
-      name: g.name,
-      slug: g.slug,
-      formalityLevel: g.formalityLevel,
-      category: g.garmentType.slug,
-      typeName: g.garmentType.name,
-      colors: g.colors.map((c) => ({
-        name: c.color.name,
-        hex: c.color.hex,
-      })),
-    }));
+    // Real catalog garments whose main color pairs well, best pairing first.
+    const partnerScore = new Map(harmonies.map((h) => [h.color.id, h.score]));
+    const partnerBySlug = new Map(palette.filter((c) => partnerScore.has(c.id)).map((c) => [c.slug, partnerScore.get(c.id)!]));
+    const matchingGarments = catalog
+      .filter((g) => g.colors[0]?.slug && partnerBySlug.has(g.colors[0].slug))
+      .sort((a, b) => partnerBySlug.get(b.colors[0].slug!)! - partnerBySlug.get(a.colors[0].slug!)!)
+      .slice(0, 8)
+      .map((g) => ({
+        id: g.id,
+        name: g.name,
+        slug: g.slug,
+        formalityLevel: g.formality,
+        category: g.typeSlug,
+        typeName: g.typeName ?? g.typeSlug,
+        colors: g.colors.map((c) => ({ name: c.name, hex: c.hex })),
+      }));
 
     return NextResponse.json({
       detectedHex: hex,
@@ -163,7 +136,7 @@ export async function POST(request: NextRequest) {
       })),
       harmonies,
       avoidHarmonies,
-      matchingGarments: transformedGarments,
+      matchingGarments,
     });
   } catch (error) {
     console.error('Color match error:', error);

@@ -133,12 +133,12 @@ export function ColorWheel() {
             </div>
             <div className="flex items-center gap-4 pt-1">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full border border-slate-300 dark:border-zinc-600 shadow-xs" style={{ backgroundColor: primaryHex }} />
+                <div className="w-8 h-8 rounded-full border border-slate-300 dark:border-zinc-600 shadow-xs" style={{ backgroundColor: primaryHex }} role="img" aria-label={primaryHex} title={primaryHex} />
                 <span className="text-xs font-mono font-bold text-slate-900 dark:text-white uppercase">{primaryHex}</span>
               </div>
               <span className="text-slate-400 font-bold">+</span>
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-full border border-slate-300 dark:border-zinc-600 shadow-xs" style={{ backgroundColor: compHex }} />
+                <div className="w-8 h-8 rounded-full border border-slate-300 dark:border-zinc-600 shadow-xs" style={{ backgroundColor: compHex }} role="img" aria-label={compHex} title={compHex} />
                 <span className="text-xs font-mono font-bold text-slate-900 dark:text-white uppercase">{compHex}</span>
               </div>
             </div>
@@ -153,9 +153,9 @@ export function ColorWheel() {
               Neighbouring Matching Colors (Smooth Flow)
             </span>
             <div className="flex items-center gap-3 pt-1">
-              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: analHex2 }} />
-              <div className="w-8 h-8 rounded-full border-2 border-amber-500 shadow-xs" style={{ backgroundColor: primaryHex }} />
-              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: analHex1 }} />
+              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: analHex2 }} role="img" aria-label={analHex2} title={analHex2} />
+              <div className="w-8 h-8 rounded-full border-2 border-amber-500 shadow-xs" style={{ backgroundColor: primaryHex }} role="img" aria-label={primaryHex} title={primaryHex} />
+              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: analHex1 }} role="img" aria-label={analHex1} title={analHex1} />
             </div>
             <p className="text-xs text-slate-600 dark:text-zinc-400 italic pt-1">
               Colors sitting next to each other on the color wheel. Creates a natural, smooth look ideal for daily wear.
@@ -168,9 +168,9 @@ export function ColorWheel() {
               3-Way Balanced Color Combination
             </span>
             <div className="flex items-center gap-3 pt-1">
-              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: primaryHex }} />
-              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: triadHex1 }} />
-              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: triadHex2 }} />
+              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: primaryHex }} role="img" aria-label={primaryHex} title={primaryHex} />
+              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: triadHex1 }} role="img" aria-label={triadHex1} title={triadHex1} />
+              <div className="w-7 h-7 rounded-full border border-slate-300 dark:border-zinc-600" style={{ backgroundColor: triadHex2 }} role="img" aria-label={triadHex2} title={triadHex2} />
             </div>
             <p className="text-xs text-slate-600 dark:text-zinc-400 italic pt-1">
               Three colors that balance each other out cleanly across your shirt, pants, and shoes.

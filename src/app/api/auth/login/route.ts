@@ -1,9 +1,9 @@
 import { prisma } from '@/lib/prisma';
 import { createUserToken, USER_COOKIE_NAME } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
+import { verifyPassword } from '@/lib/password';
 import { loginSchema } from '@/lib/validation';
-import { checkRateLimit, getClientIp } from '@/lib/rate-limit';
+import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,22 +14,27 @@ export async function POST(request: NextRequest) {
     }
     const { email, password } = parsed.data;
 
-    const rateLimitKey = `login:${getClientIp(request)}:${email}`;
-    const { allowed, retryAfterSeconds } = checkRateLimit(rateLimitKey);
-    if (!allowed) {
-      return NextResponse.json(
-        { error: 'Too many login attempts. Please try again later.' },
-        { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } }
-      );
-    }
+    const ip = getClientIp(request);
+    const account = email.toLowerCase();
+    const WINDOW = 15 * 60 * 1000;
+    // Per IP+account (normal typo protection), per account across all IPs
+    // (distributed guessing of one password), and per IP across all accounts
+    // (one IP spraying many accounts).
+    const limited = await enforceRateLimits(
+      [
+        { key: `login:ip-acct:${ip}:${account}`, limit: 5, windowMs: WINDOW },
+        { key: `login:acct:${account}`, limit: 15, windowMs: WINDOW },
+        { key: `login:ip:${ip}`, limit: 30, windowMs: WINDOW },
+      ],
+      'Too many login attempts. Please try again later.'
+    );
+    if (limited) return limited;
 
     const user = await prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
-    }
-
-    const valid = await bcrypt.compare(password, user.password);
-    if (!valid) {
+    // Always runs a bcrypt comparison (against a dummy hash when the account
+    // doesn't exist) so timing doesn't reveal which emails are registered.
+    const valid = await verifyPassword(password, user?.password);
+    if (!user || !valid) {
       return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 
