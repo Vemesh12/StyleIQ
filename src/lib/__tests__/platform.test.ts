@@ -27,12 +27,12 @@ describe('validateEnv', () => {
   const base = { DATABASE_URL: 'postgresql://u:p@localhost:5432/db', JWT_SECRET: 'x'.repeat(40) };
 
   it('accepts a valid configuration and treats empty values as unset', () => {
-    expect(validateEnv({ ...base, NEXT_PUBLIC_APP_URL: '', TRUSTED_PROXY_HOPS: '2' } as unknown as NodeJS.ProcessEnv).TRUSTED_PROXY_HOPS).toBe(2);
+    expect(validateEnv({ ...base, NEXT_APP_URL: '', TRUSTED_PROXY_HOPS: '2' } as unknown as NodeJS.ProcessEnv).TRUSTED_PROXY_HOPS).toBe(2);
   });
 
   it('lists every problem at once', () => {
-    expect(() => validateEnv({ DATABASE_URL: 'mysql://x', NEXT_PUBLIC_APP_URL: 'not a url' } as unknown as NodeJS.ProcessEnv)).toThrow(
-      /DATABASE_URL must be a postgres[\s\S]*JWT_SECRET is required[\s\S]*NEXT_PUBLIC_APP_URL/
+    expect(() => validateEnv({ DATABASE_URL: 'mysql://x', NEXT_APP_URL: 'not a url' } as unknown as NodeJS.ProcessEnv)).toThrow(
+      /DATABASE_URL must be a postgres[\s\S]*JWT_SECRET is required[\s\S]*NEXT_APP_URL/
     );
   });
 

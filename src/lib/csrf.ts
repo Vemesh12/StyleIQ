@@ -25,9 +25,9 @@ export function isCrossSiteWrite(request: NextRequest): boolean {
   const allowed = new Set([request.nextUrl.host]);
   const forwardedHost = request.headers.get('x-forwarded-host');
   if (forwardedHost) allowed.add(forwardedHost.split(',')[0].trim());
-  if (process.env.NEXT_PUBLIC_APP_URL) {
+  if (process.env.NEXT_APP_URL) {
     try {
-      allowed.add(new URL(process.env.NEXT_PUBLIC_APP_URL).host);
+      allowed.add(new URL(process.env.NEXT_APP_URL).host);
     } catch {
       // validated at startup; ignore here
     }

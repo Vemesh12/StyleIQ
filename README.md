@@ -40,7 +40,7 @@ A men's outfit-compatibility and style-recommendation platform built with Next.j
    - `DATABASE_URL` — PostgreSQL connection string. **Required.**
    - `JWT_SECRET` — secret used to sign session tokens. **Required**; the app
      refuses to start without it. Generate one with `openssl rand -base64 32`.
-   - `NEXT_PUBLIC_APP_URL` — public base URL (defaults to `http://localhost:3000`).
+   - `NEXT_APP_URL` — public base URL (defaults to `http://localhost:3000`).
    - `ADMIN_EMAIL` / `ADMIN_PASSWORD` — the admin account the seed creates. If
      `ADMIN_PASSWORD` is empty, a random password is generated and printed once.
    - `TRUSTED_PROXY_HOPS` — number of reverse proxies in front of the app, used to
@@ -165,8 +165,8 @@ write fails loudly instead of corrupting scoring.
 
 1. Set the environment variables from step 2 on the host. In production
    `JWT_SECRET` must be 32+ characters and `ADMIN_PASSWORD` 12+ characters.
-   `NEXT_PUBLIC_APP_URL` should be the real `https://` URL and must be set
-   **before** `npm run build` (Next.js bakes `NEXT_PUBLIC_*` values into the build). Serve over HTTPS —
+   `NEXT_APP_URL` should be the real `https://` URL; set it before
+   `npm run build`, because `robots.txt` is generated at build time. Serve over HTTPS —
    session cookies are `Secure` in production.
 2. `npm ci`, then `npm run db:migrate` (`npm run db:setup` on an empty
    database). The seed uses `tsx`, which is a production dependency.

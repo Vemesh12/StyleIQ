@@ -14,7 +14,7 @@ const envSchema = z
     JWT_SECRET: z
       .string({ error: 'JWT_SECRET is required. Generate one with `openssl rand -base64 32`.' })
       .min(isProduction ? 32 : 1, 'JWT_SECRET must be at least 32 characters in production.'),
-    NEXT_PUBLIC_APP_URL: z.url('NEXT_PUBLIC_APP_URL must be a full URL, e.g. https://styleiq.example').optional(),
+    NEXT_APP_URL: z.url('NEXT_APP_URL must be a full URL, e.g. https://styleiq.example').optional(),
     TRUSTED_PROXY_HOPS: z.coerce.number().int().min(1).max(10).optional(),
     UPSTASH_REDIS_REST_URL: z.url('UPSTASH_REDIS_REST_URL must be the https URL from the Upstash console.').optional(),
     UPSTASH_REDIS_REST_TOKEN: z.string().min(1).optional(),
