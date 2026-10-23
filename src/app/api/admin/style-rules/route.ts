@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const parsed = adminStyleRuleSchema.safeParse(await request.json());
+    const parsed = adminStyleRuleSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
@@ -40,7 +40,7 @@ export async function PUT(request: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const parsed = adminStyleRuleUpdateSchema.safeParse(await request.json());
+    const parsed = adminStyleRuleUpdateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }

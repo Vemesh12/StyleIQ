@@ -7,8 +7,11 @@ import { Fragment, type ReactNode } from 'react';
 
 const INLINE = /(\*\*[^*]+\*\*|\*[^*\s][^*]*\*|_[^_\s][^_]*_|`[^`]+`|\[[^\]]+\]\([^)\s]+\))/g;
 
+// Absolute http(s) URLs, in-page anchors, and site paths. A path must not
+// start with "//" or "/\" — browsers treat those as protocol-relative links
+// to another host, not internal pages.
 function safeHref(url: string): string | null {
-  return /^(https?:\/\/|\/|#)/i.test(url) ? url : null;
+  return /^(https?:\/\/|\/(?![/\\])|#)/i.test(url) ? url : null;
 }
 
 function renderInline(text: string, keyPrefix: string): ReactNode[] {

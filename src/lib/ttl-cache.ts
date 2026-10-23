@@ -31,10 +31,14 @@ export function cached<T>(key: string, ttlMs: number, compute: () => Promise<T>)
 
   evictIfFull(now);
   const value = compute();
+  const entry: Entry<T> = { value, expiresAt: now + ttlMs };
   store.delete(key);
-  store.set(key, { value, expiresAt: now + ttlMs });
-  // Don't cache failures.
-  value.catch(() => store.delete(key));
+  store.set(key, entry);
+  // Don't cache failures — but only drop OUR entry: by the time this rejects
+  // the key may hold a newer computation (after expiry or invalidation).
+  value.catch(() => {
+    if (store.get(key) === entry) store.delete(key);
+  });
   return value;
 }
 

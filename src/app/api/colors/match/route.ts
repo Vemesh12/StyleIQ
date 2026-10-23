@@ -3,32 +3,12 @@ import { prisma } from '@/lib/prisma';
 import { colorMatchSchema } from '@/lib/validation';
 import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
 import { cached } from '@/lib/ttl-cache';
-import { colorPairScore } from '@/lib/rule-engine/color-rules';
+import { colorDistance, colorPairScore } from '@/lib/rule-engine/color-rules';
 import { loadCatalog, loadRuleLookups, ENGINE_CACHE_PREFIX } from '@/lib/rule-engine/catalog';
 
-interface RgbColor {
-  r: number;
-  g: number;
-  b: number;
-}
-
-function hexToRgb(hex: string): RgbColor {
-  const clean = hex.replace('#', '').trim();
-  const full = clean.length === 3 ? clean.split('').map((c) => c + c).join('') : clean;
-  const num = parseInt(full, 16);
-  return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
-}
-
-// Perceptually weighted Euclidean RGB color distance ("redmean").
-function colorDistance(c1: RgbColor, c2: RgbColor): number {
-  const rmean = (c1.r + c2.r) / 2;
-  const r = c1.r - c2.r;
-  const g = c1.g - c2.g;
-  const b = c1.b - c2.b;
-  return Math.sqrt((((512 + rmean) * r * r) >> 8) + 4 * g * g + (((767 - rmean) * b * b) >> 8));
-}
-
-const MAX_DISTANCE = colorDistance({ r: 0, g: 0, b: 0 }, { r: 255, g: 255, b: 255 });
+// Perceptual (OKLab ΔE) distance, the same measure the rule engine uses;
+// black to white is the largest distance on the scale.
+const MAX_DISTANCE = colorDistance('#000000', '#ffffff');
 
 const loadPalette = () => cached(`${ENGINE_CACHE_PREFIX}palette`, 5 * 60 * 1000, () => prisma.color.findMany());
 
@@ -39,7 +19,7 @@ export async function POST(request: NextRequest) {
     ]);
     if (limited) return limited;
 
-    const parsed = colorMatchSchema.safeParse(await request.json());
+    const parsed = colorMatchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
@@ -51,10 +31,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Rank palette colors by closeness to the scanned color.
-    const inputRgb = hexToRgb(hex);
     const scored = palette
       .map((color) => {
-        const distance = colorDistance(inputRgb, hexToRgb(color.hex));
+        const distance = colorDistance(hex, color.hex);
         const confidence = Math.max(1, Math.min(100, Math.round(100 - (distance / MAX_DISTANCE) * 100)));
         return { ...color, distance, confidence };
       })

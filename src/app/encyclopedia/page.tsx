@@ -95,10 +95,17 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
         </div>
 
         {/* Search Bar */}
-        <form action="/encyclopedia" method="GET" className="w-full md:w-80 shrink-0">
+        <form action="/encyclopedia" method="GET" role="search" className="w-full md:w-80 shrink-0">
+          <label htmlFor="encyclopedia-search" className="sr-only">
+            Search the encyclopedia
+          </label>
           <div className="relative">
             <input
-              type="text"
+              id="encyclopedia-search"
+              // Remount when the query changes (e.g. "Clear All"), so the
+              // uncontrolled input doesn't keep showing the old search text.
+              key={searchQuery || ''}
+              type="search"
               name="q"
               defaultValue={searchQuery || ''}
               placeholder="Search clothes (e.g. Linen, Chinos, Boots)..."
@@ -107,8 +114,8 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
             {typeFilter && <input type="hidden" name="type" value={typeFilter} />}
             {colorFilter && <input type="hidden" name="color" value={colorFilter} />}
             {occasionFilter && <input type="hidden" name="occasion" value={occasionFilter} />}
-            <button type="submit" className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200">
-              🔍
+            <button type="submit" aria-label="Search" className="absolute right-3 top-3 text-slate-400 hover:text-slate-600 dark:hover:text-zinc-200">
+              <span aria-hidden="true">🔍</span>
             </button>
           </div>
         </form>
@@ -123,7 +130,7 @@ export default async function EncyclopediaPage({ searchParams }: PageProps) {
                 <span className="flex items-center gap-2">
                   <Filter className="w-4 h-4 text-amber-600 dark:text-amber-400" /> Filters
                 </span>
-                {(typeFilter || colorFilter || occasionFilter) && (
+                {(typeFilter || colorFilter || occasionFilter || searchQuery) && (
                   <Link href="/encyclopedia" className="text-xs text-amber-700 dark:text-amber-400 hover:underline font-semibold">
                     Clear All
                   </Link>

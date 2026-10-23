@@ -88,7 +88,7 @@ async function seedAdmin() {
   // Credentials come from ADMIN_EMAIL / ADMIN_PASSWORD. If no password is
   // given, a random one is generated and printed once. An existing admin is
   // never modified; use `npm run admin:set-password` for that.
-  const email = process.env.ADMIN_EMAIL || 'admin@styleiq.com';
+  const email = (process.env.ADMIN_EMAIL || 'admin@styleiq.com').trim().toLowerCase();
   if (await prisma.adminUser.findUnique({ where: { email } })) {
     console.log(`Admin ${email} already exists, leaving it unchanged.`);
     return;

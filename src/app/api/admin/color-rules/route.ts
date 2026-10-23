@@ -4,6 +4,7 @@ import { getAdminSession } from '@/lib/auth';
 import { adminColorRuleSchema } from '@/lib/validation';
 import { invalidateEngineCache } from '@/lib/rule-engine/catalog';
 import { revalidatePublicContent } from '@/lib/revalidate';
+import { clientErrorResponse, prismaErrorCode } from '@/lib/api-errors';
 
 // Curated color-pair rules. They override the color-wheel math for that
 // pair everywhere (outfit scores, color scanner, color guide).
@@ -38,17 +39,43 @@ export async function POST(request: NextRequest) {
   if (!a || !b) return NextResponse.json({ error: 'Unknown color.' }, { status: 400 });
 
   // One rule per pair, whichever order it was entered in.
-  const data = { score, harmony, reason, ruleType: 'curated' };
-  const existing = await prisma.colorCompatibilityRule.findFirst({
-    where: { OR: [{ colorAId: a.id, colorBId: b.id }, { colorAId: b.id, colorBId: a.id }] },
-  });
-  const rule = existing
-    ? await prisma.colorCompatibilityRule.update({ where: { id: existing.id }, data })
-    : await prisma.colorCompatibilityRule.create({ data: { colorAId: a.id, colorBId: b.id, ...data } });
+  // An existing rule keeps its ruleType tag; new ones are 'curated'.
+  const data = { score, harmony, reason };
+  const findPair = () =>
+    prisma.colorCompatibilityRule.findFirst({
+      where: { OR: [{ colorAId: a.id, colorBId: b.id }, { colorAId: b.id, colorBId: a.id }] },
+    });
 
-  invalidateEngineCache();
-  revalidatePublicContent('garments');
-  return NextResponse.json(rule, { status: existing ? 200 : 201 });
+  try {
+    let existing = await findPair();
+    let rule;
+    if (existing) {
+      rule = await prisma.colorCompatibilityRule.update({ where: { id: existing.id }, data });
+    } else {
+      try {
+        rule = await prisma.colorCompatibilityRule.create({ data: { colorAId: a.id, colorBId: b.id, ruleType: 'curated', ...data } });
+      } catch (error) {
+        // Someone created the same pair concurrently: update that one instead.
+        if (prismaErrorCode(error) !== 'P2002') throw error;
+        existing = await findPair();
+        if (!existing) return NextResponse.json({ error: 'A rule for this pair already exists.' }, { status: 409 });
+        rule = await prisma.colorCompatibilityRule.update({ where: { id: existing.id }, data });
+      }
+    }
+
+    invalidateEngineCache();
+    revalidatePublicContent('garments');
+    return NextResponse.json(rule, { status: existing ? 200 : 201 });
+  } catch (error) {
+    const clientError = clientErrorResponse(error, {
+      unique: 'A rule for this pair already exists.',
+      foreignKey: 'One of the colors no longer exists.',
+      notFound: 'Rule not found.',
+    });
+    if (clientError) return clientError;
+    console.error('Error saving color rule:', error);
+    return NextResponse.json({ error: 'Failed to save the color rule.' }, { status: 500 });
+  }
 }
 
 export async function DELETE(request: NextRequest) {

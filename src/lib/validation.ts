@@ -5,15 +5,66 @@ import { z } from 'zod';
 const id = z.string().min(1).max(64);
 const slug = z.string().min(1).max(100);
 
+// Emails are stored and looked up lowercased, so "Bob@x.com" and "bob@x.com"
+// are the same account.
+const email = z.string().trim().toLowerCase().max(254).email('A valid email is required');
+
+// A real calendar date in YYYY-MM-DD form: "2024-02-31" is rejected because
+// it doesn't survive a round trip through Date, and so are dates before 2000.
+export const MIN_DATE = '2000-01-01';
+export function isCalendarDate(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a YYYY-MM-DD date.')
+  .refine(isCalendarDate, 'Use a real calendar date.')
+  .refine((s) => s >= MIN_DATE, `Dates before ${MIN_DATE} are not supported.`);
+
+const dedupe = (ids: string[]) => Array.from(new Set(ids));
+
+/**
+ * A list of ids, de-duplicated BEFORE the min/max checks so ['a', 'a'] counts
+ * as one item. The raw list is bounded too (twice the cap) so a huge payload
+ * of repeats is still rejected cheaply.
+ */
+const idList = (min: number, max: number, messages: { min?: string; max?: string } = {}) =>
+  z
+    .array(id)
+    .max(max * 2, messages.max)
+    .transform(dedupe)
+    .pipe(z.array(id).min(min, messages.min).max(max, messages.max));
+
+// Coordinates are rounded to 2 decimals (~1 km): enough for the weather, and
+// it keeps precise locations out of upstream requests and cache keys.
+const roundCoord = (v: number) => Math.round(v * 100) / 100;
+const lat = z.number().min(-90).max(90).transform(roundCoord);
+const lon = z.number().min(-180).max(180).transform(roundCoord);
+
+// A closet can hold this many items, so every closet-based endpoint accepts
+// that many ids.
+export const MAX_WARDROBE_ITEMS = 500;
+
+// Guests send their own wear history from this browser (signed-in users' comes
+// from the DB). Only the last week matters, so an over-long list is trimmed to
+// its newest entries instead of failing the whole request.
+export const MAX_RECENTLY_WORN = 300;
+const recentlyWorn = z.preprocess(
+  (v) => (Array.isArray(v) ? v.slice(-MAX_RECENTLY_WORN) : v),
+  z.array(z.object({ garmentId: id, wornOn: isoDate })).max(MAX_RECENTLY_WORN)
+);
+
 export const registerSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
-  email: z.string().trim().max(254).email('A valid email is required'),
+  email,
   // bcrypt only uses the first 72 bytes; longer inputs just waste CPU.
   password: z.string().min(8, 'Password must be at least 8 characters').max(72, 'Password must be at most 72 characters'),
 });
 
 export const loginSchema = z.object({
-  email: z.string().trim().max(254).email('A valid email is required'),
+  email,
   password: z.string().min(1, 'Password is required').max(72, 'Invalid email or password'),
 });
 
@@ -56,20 +107,20 @@ export const personalizationRecommendSchema = styleProfileSchema.refine(
 export const wardrobeAddSchema = z
   .object({
     garmentId: id.optional(),
-    garmentIds: z.array(id).max(200).optional(),
+    garmentIds: z.array(id).max(MAX_WARDROBE_ITEMS * 2).optional(),
   })
   .refine((v) => v.garmentId || v.garmentIds?.length, 'garmentId is required')
-  .transform((v) => Array.from(new Set([...(v.garmentId ? [v.garmentId] : []), ...(v.garmentIds ?? [])])));
+  .transform((v) => dedupe([...(v.garmentId ? [v.garmentId] : []), ...(v.garmentIds ?? [])]))
+  .pipe(z.array(id).max(MAX_WARDROBE_ITEMS, `Your closet can hold up to ${MAX_WARDROBE_ITEMS} items.`));
 
 // The score is NOT accepted from the client — the server recomputes it from
 // the garments and the same context (occasion/season/profile) the user saw.
 export const savedOutfitCreateSchema = z.object({
   name: z.string().trim().min(1).max(100).default('My Saved Outfit'),
-  garmentIds: z
-    .array(id)
-    .min(2, 'At least 2 garments required to save an outfit')
-    .max(10, 'An outfit can have at most 10 garments')
-    .transform((ids) => Array.from(new Set(ids))),
+  garmentIds: idList(2, 10, {
+    min: 'At least 2 garments required to save an outfit',
+    max: 'An outfit can have at most 10 garments',
+  }),
   occasionId: id.optional(),
   occasionSlug: slug.optional(),
   seasonId: id.optional(),
@@ -143,21 +194,20 @@ export const adminGuideUpdateSchema = adminGuideSchema.extend({ id });
 export const adminStyleRuleUpdateSchema = adminStyleRuleSchema.extend({ id });
 
 // The daily suggestion runs a top x bottom x shoe search over these ids, so
-// the cap directly bounds the work one request can trigger.
-export const MAX_DAILY_SUGGESTION_GARMENTS = 100;
+// the cap bounds the work one request can trigger. It matches the closet size
+// limit so a full closet still works.
+export const MAX_DAILY_SUGGESTION_GARMENTS = MAX_WARDROBE_ITEMS;
 
 export const dailySuggestionSchema = z.object({
-  garmentIds: z
-    .array(id)
-    .min(1, 'Add a few items to your closet first.')
-    .max(MAX_DAILY_SUGGESTION_GARMENTS, `Daily suggestions support up to ${MAX_DAILY_SUGGESTION_GARMENTS} closet items.`)
-    .transform((ids) => Array.from(new Set(ids))),
-  lat: z.number().min(-90).max(90).optional(),
-  lon: z.number().min(-180).max(180).optional(),
+  garmentIds: idList(1, MAX_DAILY_SUGGESTION_GARMENTS, {
+    min: 'Add a few items to your closet first.',
+    max: `Daily suggestions support up to ${MAX_DAILY_SUGGESTION_GARMENTS} closet items.`,
+  }),
+  lat: lat.optional(),
+  lon: lon.optional(),
   // The user's local date, so the suggestion rotates at their midnight.
-  localDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  // Guests' wear history from this browser (signed-in users' comes from the DB).
-  recentlyWorn: z.array(z.object({ garmentId: id, wornOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) })).max(100).optional(),
+  localDate: isoDate.optional(),
+  recentlyWorn: recentlyWorn.optional(),
   // 0 = today's pick, 1+ = "Try Another" alternatives.
   variant: z.number().int().min(0).max(50).default(0),
   profile: styleProfileSchema.optional(),
@@ -165,6 +215,8 @@ export const dailySuggestionSchema = z.object({
 
 export const quickPickSchema = z.object({
   occasionSlug: slug,
+  // The user's local date (for "worn recently" signals), like the closet routes.
+  localDate: isoDate.optional(),
   profile: styleProfileSchema.optional(),
 });
 
@@ -178,14 +230,6 @@ export const colorMatchSchema = z.object({
 // ---------------------------------------------------------------------------
 // Accounts & personal features
 // ---------------------------------------------------------------------------
-
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use a YYYY-MM-DD date.');
-const idList = (min: number, max: number) =>
-  z
-    .array(id)
-    .min(min)
-    .max(max)
-    .transform((ids) => Array.from(new Set(ids)));
 
 export const profileUpdateSchema = z.object({ profile: styleProfileSchema });
 
@@ -202,14 +246,14 @@ export const customGarmentSchema = z.object({
 
 export const completeOutfitSchema = z
   .object({
-    garmentIds: idList(1, 100),
+    garmentIds: idList(1, MAX_WARDROBE_ITEMS),
     lockedIds: idList(1, 2),
     occasionSlug: slug.optional(),
-    lat: z.number().min(-90).max(90).optional(),
-    lon: z.number().min(-180).max(180).optional(),
+    lat: lat.optional(),
+    lon: lon.optional(),
     localDate: isoDate.optional(),
     profile: styleProfileSchema.optional(),
-    recentlyWorn: z.array(z.object({ garmentId: id, wornOn: isoDate })).max(100).optional(),
+    recentlyWorn: recentlyWorn.optional(),
   })
   .refine((v) => v.lockedIds.every((l) => v.garmentIds.includes(l)), 'Locked items must be in your closet.');
 
@@ -226,7 +270,7 @@ export const wearLogSchema = z.object({
 });
 
 export const gapsSchema = z.object({
-  garmentIds: idList(1, 100),
+  garmentIds: idList(1, MAX_WARDROBE_ITEMS),
   occasionSlug: slug.optional(),
   profile: styleProfileSchema.optional(),
 });

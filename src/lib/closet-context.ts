@@ -33,7 +33,7 @@ export async function loadClosetContext(input: {
   const session = await getUserSession();
   const userId = session?.id ?? null;
   const today = input.localDate ?? new Date().toISOString().slice(0, 10);
-  const weather = input.lat !== undefined && input.lon !== undefined ? await getWeatherForCoords(input.lat, input.lon) : null;
+  const weather = input.lat !== undefined && input.lon !== undefined ? await getWeatherForCoords(input.lat, input.lon, today) : null;
 
   const [garments, lookups, season, occasion, personalization, signals] = await Promise.all([
     loadGarments(input.garmentIds, userId),

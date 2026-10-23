@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { X, LogIn, UserPlus, Lock } from 'lucide-react';
 import { readGuestWardrobe, clearGuestWardrobe } from '@/lib/guest-wardrobe';
 import { reconcileStyleProfile } from '@/lib/style-profile';
+import { notifyAuthChanged } from '@/components/auth-events';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -15,6 +16,8 @@ interface AuthModalProps {
   initialMode?: 'login' | 'register';
 }
 
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }: AuthModalProps) {
   const [mode, setMode] = useState<'login' | 'register'>(initialMode);
@@ -23,6 +26,50 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  const titleId = useId();
+  const descriptionId = useId();
+  const idPrefix = useId();
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  // While open: focus the first field, keep Tab inside the dialog, close on
+  // Escape, and give focus back to whatever opened it when it closes.
+  useEffect(() => {
+    if (!isOpen) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    const first = dialog?.querySelector<HTMLElement>('input') ?? dialog?.querySelector<HTMLElement>(FOCUSABLE);
+    first?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(FOCUSABLE));
+      if (focusable.length === 0) return;
+      const firstEl = focusable[0];
+      const lastEl = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === firstEl || !dialog.contains(document.activeElement))) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && (document.activeElement === lastEl || !dialog.contains(document.activeElement))) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      if (previouslyFocused && document.contains(previouslyFocused)) previouslyFocused.focus();
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -60,7 +107,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
         body: JSON.stringify(body),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (res.ok && data.user) {
         await syncGuestWardrobe();
@@ -72,6 +119,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
         } catch {
           // Non-fatal: personalization just keeps using the local profile.
         }
+        notifyAuthChanged(data.user);
         onSuccess(data.user);
         onClose();
       } else {
@@ -84,11 +132,26 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
-      <Card className="w-full max-w-md border-slate-200 relative shadow-2xl bg-white">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in"
+      onMouseDown={(e) => {
+        // Click on the backdrop (not inside the card) closes the dialog.
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <Card
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        className="w-full max-w-md border-slate-200 relative shadow-2xl bg-white"
+      >
         <button
+          type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 p-1 rounded-lg transition-colors"
+          aria-label="Close"
+          className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 p-1 rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
         >
           <X className="w-5 h-5" />
         </button>
@@ -97,10 +160,10 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
           <div className="mx-auto w-12 h-12 rounded-xl bg-gradient-to-br from-amber-600 to-orange-600 flex items-center justify-center mb-3 shadow-md shadow-amber-600/20">
             <Lock className="w-6 h-6 text-white" />
           </div>
-          <CardTitle className="text-2xl text-slate-900">
+          <CardTitle id={titleId} className="text-2xl text-slate-900">
             {mode === 'login' ? 'Welcome Back to StyleIQ' : 'Create Your StyleIQ Account'}
           </CardTitle>
-          <p className="text-xs text-slate-500 mt-1">
+          <p id={descriptionId} className="text-xs text-slate-500 mt-1">
             {mode === 'login'
               ? 'Sign in to access your saved wardrobe and outfits'
               : 'Save your digital wardrobe and get personalized style rules'}
@@ -111,6 +174,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
           <div className="flex rounded-lg bg-slate-100 p-1 mb-6 border border-slate-200">
             <button
               type="button"
+              aria-pressed={mode === 'login'}
               onClick={() => { setMode('login'); setError(''); }}
               className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all flex items-center justify-center gap-1.5 ${
                 mode === 'login'
@@ -122,6 +186,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
             </button>
             <button
               type="button"
+              aria-pressed={mode === 'register'}
               onClick={() => { setMode('register'); setError(''); }}
               className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all flex items-center justify-center gap-1.5 ${
                 mode === 'register'
@@ -136,11 +201,13 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === 'register' && (
               <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                <label htmlFor={`${idPrefix}-name`} className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
                   Full Name
                 </label>
                 <Input
+                  id={`${idPrefix}-name`}
                   type="text"
+                  autoComplete="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="John Doe"
@@ -150,11 +217,13 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
             )}
 
             <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+              <label htmlFor={`${idPrefix}-email`} className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
                 Email Address
               </label>
               <Input
+                id={`${idPrefix}-email`}
                 type="email"
+                autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
@@ -163,11 +232,13 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+              <label htmlFor={`${idPrefix}-password`} className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
                 Password
               </label>
               <Input
+                id={`${idPrefix}-password`}
                 type="password"
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
@@ -176,7 +247,7 @@ export function AuthModal({ isOpen, onClose, onSuccess, initialMode = 'login' }:
             </div>
 
             {error && (
-              <p className="text-xs text-red-600 bg-red-50 border border-red-200 px-3 py-2 rounded-lg font-medium">
+              <p role="alert" className="text-xs text-red-600 bg-red-50 border border-red-200 px-3 py-2 rounded-lg font-medium">
                 {error}
               </p>
             )}

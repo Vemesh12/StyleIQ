@@ -1,12 +1,14 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { GarmentCard } from '@/components/garment-card';
 import { GarmentIllustration } from '@/components/garment-illustration';
 import { AuthModal } from '@/components/auth-modal';
+import { AUTH_CHANGED_EVENT } from '@/components/auth-events';
+import { pluralize } from '@/components/plural';
 import { loadStyleProfile } from '@/lib/style-profile';
 import { readGuestWardrobe, readGuestWearLog, writeGuestWardrobe } from '@/lib/guest-wardrobe';
 import { OutfitActions } from '@/components/outfit-actions';
@@ -44,7 +46,13 @@ import {
 export default function DigitalWardrobePage() {
   const [wardrobe, setWardrobe] = useState<WardrobeItem[]>([]);
   const [allGarments, setAllGarments] = useState<AllGarment[]>([]);
+  // `loading` = first load (nothing to show yet); `refreshing` = reloading
+  // after a change, which keeps the current closet on screen.
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [hasLoaded, setHasLoaded] = useState(false);
+  const hasLoadedRef = useRef(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(true);
   const [addingId, setAddingId] = useState<string | null>(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -57,11 +65,18 @@ export default function DigitalWardrobePage() {
 
   const handleDeleteOutfit = async (id: string) => {
     if (!confirm('Are you sure you want to delete this saved outfit?')) return;
+    setActionError(null);
     try {
-      await fetch(`/api/user/outfits?id=${id}`, { method: 'DELETE' });
-      setSavedOutfits((prev) => prev.filter((o) => o.id !== id));
+      const res = await fetch(`/api/user/outfits?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      // 404 = already gone, so it's fine to drop it from the list too.
+      if (res.ok || res.status === 404) {
+        setSavedOutfits((prev) => prev.filter((o) => o.id !== id));
+      } else {
+        setActionError('Could not delete that outfit — please try again.');
+      }
     } catch (err) {
       console.error(err);
+      setActionError('Could not delete that outfit — check your connection and try again.');
     }
   };
 
@@ -73,18 +88,33 @@ export default function DigitalWardrobePage() {
     setAllGarments(data.allGarments);
     setSavedOutfits(data.savedOutfits);
     setLoadError(null);
+    hasLoadedRef.current = true;
+    setHasLoaded(true);
   }, []);
 
-  const fetchData = async () => {
-    setLoading(true);
+  // Reloads everything. Returns the fresh data, or null if loading failed
+  // (the current closet then stays on screen with an error message).
+  const fetchData = useCallback(async (): Promise<WardrobeData | null> => {
+    const initial = !hasLoadedRef.current;
+    if (initial) setLoading(true);
+    else setRefreshing(true);
     try {
-      applyData(await loadWardrobeData());
+      const data = await loadWardrobeData();
+      applyData(data);
+      return data;
     } catch (error) {
       console.error('Error fetching wardrobe data:', error);
-      setLoadError('Could not load your closet. Check your connection and refresh.');
+      setLoadError(
+        initial
+          ? 'Could not load your closet. Check your connection and try again.'
+          : 'Could not refresh your closet — what you see may be out of date.'
+      );
+      return null;
+    } finally {
+      if (initial) setLoading(false);
+      else setRefreshing(false);
     }
-    setLoading(false);
-  };
+  }, [applyData]);
 
   useEffect(() => {
     let active = true;
@@ -92,16 +122,27 @@ export default function DigitalWardrobePage() {
       .then((data) => active && applyData(data))
       .catch((error) => {
         console.error('Error fetching wardrobe data:', error);
-        if (active) setLoadError('Could not load your closet. Check your connection and refresh.');
+        if (active) setLoadError('Could not load your closet. Check your connection and try again.');
       })
       .finally(() => active && setLoading(false));
+
+    // Signing in or out (here or from the navbar) switches between the
+    // browser's guest closet and the account's closet.
+    const onAuthChanged = () => {
+      setDailySuggestion(null);
+      setDailyError(null);
+      void fetchData();
+    };
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
     return () => {
       active = false;
+      window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
     };
-  }, [applyData]);
+  }, [applyData, fetchData]);
 
   const handleAddGarment = async (garmentId: string) => {
     setAddingId(garmentId);
+    setActionError(null);
     if (isLoggedIn) {
       try {
         const res = await fetch('/api/user/wardrobe', {
@@ -110,8 +151,10 @@ export default function DigitalWardrobePage() {
           body: JSON.stringify({ garmentId }),
         });
         if (res.ok) await fetchData();
+        else setActionError('Could not add that item — please try again.');
       } catch (e) {
         console.error(e);
+        setActionError('Could not add that item — check your connection and try again.');
       }
     } else {
       writeGuestWardrobe([...readGuestWardrobe(), garmentId]);
@@ -121,17 +164,26 @@ export default function DigitalWardrobePage() {
   };
 
   const [dailyVariant, setDailyVariant] = useState(0);
+  // Only the latest suggestion request's answer is shown.
+  const dailyRequestRef = useRef(0);
 
   // variant 0 = today's pick; "Try Another" asks for the next distinct option.
-  const getTodaysOutfit = (variant = 0) => {
+  // `items` defaults to the closet on screen; pass the fresh one after a change.
+  const getTodaysOutfit = (variant = 0, items: WardrobeItem[] = wardrobe) => {
+    const requestId = ++dailyRequestRef.current;
     setDailyVariant(variant);
     setDailyLoading(true);
     setDailyError(null);
     setDailySuggestion(null);
 
-    const garmentIds = wardrobe.map((w) => w.garmentId);
+    const garmentIds = items.map((w) => w.garmentId);
+    if (garmentIds.length === 0) {
+      setDailyLoading(false);
+      return;
+    }
 
     const requestSuggestion = (lat?: number, lon?: number) => {
+      if (requestId !== dailyRequestRef.current) return;
       fetch('/api/wardrobe/daily-suggestion', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -146,13 +198,18 @@ export default function DigitalWardrobePage() {
           recentlyWorn: isLoggedIn ? undefined : readGuestWearLog(),
         }),
       })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.error) setDailyError(data.error);
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (requestId !== dailyRequestRef.current) return;
+          if (!res.ok || data.error) setDailyError(data.error || 'Could not get a suggestion right now — try again in a moment.');
           else setDailySuggestion(data);
         })
-        .catch(() => setDailyError('Could not get a suggestion right now — try again in a moment.'))
-        .finally(() => setDailyLoading(false));
+        .catch(() => {
+          if (requestId === dailyRequestRef.current) setDailyError('Could not get a suggestion right now — try again in a moment.');
+        })
+        .finally(() => {
+          if (requestId === dailyRequestRef.current) setDailyLoading(false);
+        });
     };
 
     if (navigator.geolocation) {
@@ -168,18 +225,34 @@ export default function DigitalWardrobePage() {
 
   const handleRemoveGarment = async (garmentId: string, isOwn = false) => {
     if (isOwn && !confirm('Delete this item? It was added by you, so it will be removed from your closet and saved outfits.')) return;
+    setActionError(null);
+    let data: WardrobeData | null = null;
     if (isLoggedIn) {
       try {
-        const res = await fetch(isOwn ? `/api/user/garments?id=${garmentId}` : `/api/user/wardrobe?garmentId=${garmentId}`, {
+        const id = encodeURIComponent(garmentId);
+        const res = await fetch(isOwn ? `/api/user/garments?id=${id}` : `/api/user/wardrobe?garmentId=${id}`, {
           method: 'DELETE',
         });
-        if (res.ok) await fetchData();
+        if (res.ok) data = await fetchData();
+        else setActionError('Could not remove that item — please try again.');
       } catch (e) {
         console.error(e);
+        setActionError('Could not remove that item — check your connection and try again.');
       }
     } else {
       writeGuestWardrobe(readGuestWardrobe().filter((id) => id !== garmentId));
-      await fetchData();
+      data = await fetchData();
+    }
+    // The shown suggestion may include the removed item: ask again from the
+    // updated closet.
+    if (data && (dailySuggestion || dailyLoading || dailyError)) {
+      if (data.wardrobe.length > 0) getTodaysOutfit(dailyVariant, data.wardrobe);
+      else {
+        dailyRequestRef.current++;
+        setDailySuggestion(null);
+        setDailyLoading(false);
+        setDailyError(null);
+      }
     }
   };
 
@@ -193,13 +266,27 @@ export default function DigitalWardrobePage() {
   return (
     <div className="w-full px-4 sm:px-8 lg:px-12 py-12 bg-slate-50 dark:bg-zinc-950 min-h-screen transition-colors duration-300">
       {loadError && (
-        <p className="mb-6 text-sm font-medium text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-xl px-4 py-3">
-          {loadError}
+        <div role="alert" className="mb-6 flex flex-wrap items-center justify-between gap-3 text-sm font-medium text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-xl px-4 py-3">
+          <span>{loadError}</span>
+          <Button variant="outline" size="sm" onClick={() => void fetchData()} disabled={loading || refreshing}>
+            Try again
+          </Button>
+        </div>
+      )}
+      {actionError && (
+        <p role="alert" className="mb-6 text-sm font-medium text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-xl px-4 py-3">
+          {actionError}
+        </p>
+      )}
+      {refreshing && (
+        <p role="status" className="sr-only">
+          Updating your closet…
         </p>
       )}
 
-      {/* Guest Mode Info Banner */}
-      {!isLoggedIn && (
+      {/* Guest Mode Info Banner — only once we know they're a guest (a 401),
+          not when loading simply failed. */}
+      {hasLoaded && !isLoggedIn && (
         <div className="mb-6 p-4 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-2xs">
           <div className="flex items-center gap-3 text-sm text-amber-900 dark:text-amber-300">
             <Info className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0" />
@@ -309,7 +396,7 @@ export default function DigitalWardrobePage() {
 
       <div className="mb-8">
         {isLoggedIn ? (
-          <CustomGarmentForm onCreated={fetchData} />
+          <CustomGarmentForm onCreated={() => void fetchData()} />
         ) : (
           <p className="text-sm text-slate-500 dark:text-zinc-400">
             Own something that isn&apos;t in the catalog?{' '}
@@ -383,7 +470,7 @@ export default function DigitalWardrobePage() {
           return (
             <div key={cat} className="p-4 rounded-xl bg-white dark:bg-zinc-900 border border-slate-200 dark:border-zinc-800 text-center shadow-2xs">
               <span className="text-3xl font-extrabold text-amber-600 dark:text-amber-400">{count}</span>
-              <span className="text-xs text-slate-500 dark:text-zinc-400 block uppercase tracking-wider font-semibold mt-1">{cat}s</span>
+              <span className="text-xs text-slate-500 dark:text-zinc-400 block uppercase tracking-wider font-semibold mt-1">{pluralize(cat)}</span>
             </div>
           );
         })}
@@ -445,7 +532,9 @@ export default function DigitalWardrobePage() {
                         {outfit.outfitScore}% Score
                       </Badge>
                       <button
+                        type="button"
                         onClick={() => handleDeleteOutfit(outfit.id)}
+                        aria-label={`Delete ${outfit.name}`}
                         className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
                         title="Delete Outfit"
                       >
@@ -513,6 +602,9 @@ export default function DigitalWardrobePage() {
             <div className="py-20 text-center flex items-center justify-center">
               <div className="animate-spin w-8 h-8 border-2 border-amber-600 dark:border-amber-400 border-t-transparent rounded-full" />
             </div>
+          ) : !hasLoaded ? (
+            // Initial load failed: the error banner above has a retry button.
+            null
           ) : wardrobe.length > 0 ? (
             <div className="space-y-12">
               {categories.map((category) => {
@@ -523,7 +615,7 @@ export default function DigitalWardrobePage() {
                   <div key={category} className="space-y-4">
                     <h2 className="text-xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
                       <Shirt className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                      My {category}s ({items.length})
+                      My {pluralize(category)} ({items.length})
                     </h2>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                       {items.map((item) => (
@@ -539,7 +631,7 @@ export default function DigitalWardrobePage() {
                           />
                           <button
                             onClick={() => handleRemoveGarment(item.garmentId, item.garment.isOwn)}
-                            className="absolute top-3 right-3 p-2 rounded-lg bg-red-600 text-white opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:bg-red-700 transition-all shadow-md cursor-pointer"
+                            className="absolute top-3 right-3 p-2 rounded-lg bg-red-600 text-white pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100 hover:bg-red-700 transition-all shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
                             title={item.garment.isOwn ? 'Delete your item' : 'Remove from closet'}
                             aria-label={`${item.garment.isOwn ? 'Delete' : 'Remove'} ${item.garment.name}`}
                           >
@@ -573,9 +665,8 @@ export default function DigitalWardrobePage() {
       <AuthModal
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
-        onSuccess={() => {
-          fetchData();
-        }}
+        // The modal fires the auth-changed event, which reloads the closet.
+        onSuccess={() => {}}
       />
     </div>
   );

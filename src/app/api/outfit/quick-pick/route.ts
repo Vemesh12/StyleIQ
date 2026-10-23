@@ -23,11 +23,11 @@ export async function POST(request: NextRequest) {
     ]);
     if (limited) return limited;
 
-    const parsed = bodySchema.safeParse(await request.json());
+    const parsed = bodySchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
-    const { occasionSlug, profile } = parsed.data;
+    const { occasionSlug, localDate, profile } = parsed.data;
 
     const occasion = await resolveOccasion({ slug: occasionSlug });
     if (!occasion) {
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
     const session = await getUserSession();
     const adjust = session
-      ? rankAdjustFor(await loadUserSignals(session.id, new Date().toISOString().slice(0, 10)))
+      ? rankAdjustFor(await loadUserSignals(session.id, localDate ?? new Date().toISOString().slice(0, 10)))
       : () => 0;
     const ranked = picks
       .map((pick) => ({ pick, rank: pick.score.totalScore + adjust([pick.top, pick.layer, pick.bottom, pick.shoe, pick.belt].filter((g) => !!g)) }))

@@ -3,11 +3,14 @@ import { prisma } from '@/lib/prisma';
 import { getUserSession } from '@/lib/auth';
 import { wearLogSchema } from '@/lib/validation';
 import { toDateOnly } from '@/lib/user-signals';
+import { clientErrorResponse } from '@/lib/api-errors';
 
 // "I wore this" history — the outfit calendar. Recent entries also keep the
 // daily suggestion from repeating the same pieces day after day.
 
 const MAX_ENTRIES_PER_DAY = 5;
+// Nearly three years of daily logging; older entries are pruned on write.
+const MAX_ENTRIES_PER_USER = 1000;
 
 export async function GET(request: NextRequest) {
   const user = await getUserSession();
@@ -58,14 +61,31 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "You can't log an outfit for a future date." }, { status: 400 });
   }
 
-  const known = await prisma.garment.count({ where: { id: { in: garmentIds }, OR: [{ ownerId: null }, { ownerId: user.id }] } });
-  if (known !== garmentIds.length) return NextResponse.json({ error: 'Unknown garment.' }, { status: 400 });
-  if ((await prisma.wearLog.count({ where: { userId: user.id, wornOn: date } })) >= MAX_ENTRIES_PER_DAY) {
-    return NextResponse.json({ error: `Up to ${MAX_ENTRIES_PER_DAY} outfits per day.` }, { status: 400 });
-  }
+  try {
+    const known = await prisma.garment.count({ where: { id: { in: garmentIds }, OR: [{ ownerId: null }, { ownerId: user.id }] } });
+    if (known !== garmentIds.length) return NextResponse.json({ error: 'Unknown garment.' }, { status: 400 });
+    if ((await prisma.wearLog.count({ where: { userId: user.id, wornOn: date } })) >= MAX_ENTRIES_PER_DAY) {
+      return NextResponse.json({ error: `Up to ${MAX_ENTRIES_PER_DAY} outfits per day.` }, { status: 400 });
+    }
 
-  const entry = await prisma.wearLog.create({ data: { userId: user.id, wornOn: date, garmentIds, outfitScore } });
-  return NextResponse.json({ id: entry.id, wornOn }, { status: 201 });
+    const entry = await prisma.wearLog.create({ data: { userId: user.id, wornOn: date, garmentIds, outfitScore } });
+
+    // Bounded history: drop the oldest entries past the cap.
+    const stale = await prisma.wearLog.findMany({
+      where: { userId: user.id },
+      orderBy: [{ wornOn: 'desc' }, { createdAt: 'desc' }],
+      skip: MAX_ENTRIES_PER_USER,
+      select: { id: true },
+    });
+    if (stale.length) await prisma.wearLog.deleteMany({ where: { id: { in: stale.map((r) => r.id) } } });
+
+    return NextResponse.json({ id: entry.id, wornOn }, { status: 201 });
+  } catch (error) {
+    const clientError = clientErrorResponse(error);
+    if (clientError) return clientError;
+    console.error('Error saving wear log:', error);
+    return NextResponse.json({ error: 'Failed to save your wear history.' }, { status: 500 });
+  }
 }
 
 export async function DELETE(request: NextRequest) {

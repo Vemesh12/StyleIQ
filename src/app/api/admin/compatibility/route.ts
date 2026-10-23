@@ -12,6 +12,7 @@ export async function GET() {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const rules = await prisma.compatibilityRule.findMany({
+    where: { garmentA: { ownerId: null }, garmentB: { ownerId: null } },
     include: {
       garmentA: { select: { id: true, name: true } },
       garmentB: { select: { id: true, name: true } },
@@ -27,13 +28,18 @@ export async function POST(request: NextRequest) {
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const parsed = adminCompatibilityRuleSchema.safeParse(await request.json());
+    const parsed = adminCompatibilityRuleSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const { garmentAId, garmentBId, rating, reason } = parsed.data;
     if (garmentAId === garmentBId) {
       return NextResponse.json({ error: 'Pick two different garments.' }, { status: 400 });
+    }
+    // Rules are for the shared catalog only; users' private items stay private.
+    const catalogCount = await prisma.garment.count({ where: { id: { in: [garmentAId, garmentBId] }, ownerId: null } });
+    if (catalogCount !== 2) {
+      return NextResponse.json({ error: 'Both garments must be catalog items.' }, { status: 400 });
     }
     const compatibilityType = compatibilityTypeForRating(rating);
     const data = { rating, reason: reason ?? '', compatibilityType };

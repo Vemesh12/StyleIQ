@@ -7,13 +7,16 @@ export interface OutfitPick {
   shoe: ScoringGarment;
   layer?: ScoringGarment;
   belt?: ScoringGarment;
+  // Locked accessories other than the belt (tie, watch, pocket square...),
+  // carried into every result so "complete my outfit" never drops them.
+  accessories?: ScoringGarment[];
   score: OutfitScore;
 }
 
 const BEAM_WIDTH = 60;
 
-function piecesOf(p: Omit<OutfitPick, 'score'>): ScoringGarment[] {
-  return [p.top, p.layer, p.bottom, p.shoe, p.belt].filter((g): g is ScoringGarment => !!g);
+function piecesOf(p: Partial<Omit<OutfitPick, 'score'>>): ScoringGarment[] {
+  return [p.top, p.layer, p.bottom, p.shoe, p.belt, ...(p.accessories ?? [])].filter((g): g is ScoringGarment => !!g);
 }
 
 /** Deterministic 0-1 value from a string (FNV-1a), for seeded rotation. */
@@ -34,13 +37,16 @@ function seededRandom(seed: string): number {
  *   combination, so adding a layer and belt stays cheap.
  * - A layer is added when weather/season/occasion call for one, or when it
  *   clearly improves the look and it isn't hot; a belt when the trousers and
- *   top call for one.
+ *   top call for one and it doesn't make the outfit score worse.
  * - Results are diversified (no near-duplicates differing only by shoes),
  *   and `rotationSeed` (e.g. today's date) rotates between near-equal top
  *   outfits so the daily suggestion isn't identical every day.
- * - `requiredIds` locks pieces into every result ("complete my outfit").
+ * - `requiredIds` locks pieces into every result ("complete my outfit"),
+ *   including any accessories (a locked belt is always added; other locked
+ *   accessories are returned in `accessories`).
  * - `rankAdjust` nudges the ORDER (recently worn pieces, liked/disliked
- *   combinations) without changing the displayed style score.
+ *   combinations) without changing the displayed style score. It is applied
+ *   while pruning the beam too, so a re-ranked outfit can't be lost early.
  */
 export function findBestOutfits(params: {
   garments: ScoringGarment[];
@@ -64,22 +70,48 @@ export function findBestOutfits(params: {
   const belts = lockedIn(garments.filter((g) => g.typeSlug === 'belt'), (g) => g.typeSlug === 'belt');
   const forceLayer = required.some((g) => g.slot === 'layer');
   const forceBelt = required.some((g) => g.typeSlug === 'belt');
+  // Locked ties, watches etc. are part of every candidate from the start, so
+  // the rest of the outfit is chosen to work with them.
+  const lockedExtras = required.filter((g) => g.slot === 'accessory' && g.typeSlug !== 'belt');
+  const accessories = lockedExtras.length ? { accessories: lockedExtras } : {};
   if (tops.length === 0 || bottoms.length === 0 || shoes.length === 0) return [];
-  const rankOf = (o: OutfitPick) => o.score.totalScore + (rankAdjust ? rankAdjust(piecesOf(o)) : 0);
+  const adjustOf = (pieces: ScoringGarment[]) => (rankAdjust ? rankAdjust(pieces) : 0);
+  const rankOf = (o: OutfitPick) => o.score.totalScore + adjustOf(piecesOf(o));
 
   const score = (pieces: ScoringGarment[]) => scoreOutfit(pieces, ctx, lookups).totalScore;
+  // Beam entries are ordered by style score + rankAdjust; `s` stays the plain
+  // style score used for the layer/belt decisions.
+  const scored = <T extends Partial<Omit<OutfitPick, 'score'>>>(o: T) => {
+    const pieces = piecesOf(o);
+    const s = score(pieces);
+    return { ...o, s, rank: s + adjustOf(pieces) };
+  };
 
   // 1. Best top + bottom pairs.
   const pairs = tops
-    .flatMap((top) => bottoms.map((bottom) => ({ top, bottom, s: score([top, bottom]) })))
-    .sort((a, b) => b.s - a.s)
+    .flatMap((top) => bottoms.map((bottom) => scored({ top, bottom, ...accessories })))
+    .sort((a, b) => b.rank - a.rank)
     .slice(0, BEAM_WIDTH);
 
   // 2. Add shoes.
   const withShoes = pairs
-    .flatMap(({ top, bottom }) => shoes.map((shoe) => ({ top, bottom, shoe, s: score([top, bottom, shoe]) })))
-    .sort((a, b) => b.s - a.s)
+    .flatMap(({ top, bottom }) => shoes.map((shoe) => scored({ top, bottom, shoe, ...accessories })))
+    .sort((a, b) => b.rank - a.rank)
     .slice(0, BEAM_WIDTH);
+
+  /** Best addition among `options` that passes `accept` (on the plain score), ranked with rankAdjust. */
+  const bestAddition = (
+    options: ScoringGarment[],
+    build: (g: ScoringGarment) => Omit<OutfitPick, 'score'>,
+    accept: (s: number) => boolean
+  ) => {
+    let best: { g: ScoringGarment; s: number; rank: number } | null = null;
+    for (const g of options) {
+      const { s, rank } = scored(build(g));
+      if (accept(s) && (!best || rank > best.rank)) best = { g, s, rank };
+    }
+    return best;
+  };
 
   // 3. Layer and belt where they belong.
   const needLayer = wantsLayer(ctx);
@@ -88,33 +120,25 @@ export function findBestOutfits(params: {
   const occasionFormality = ctx.occasion?.formalityLevel ?? 0;
 
   const complete: OutfitPick[] = withShoes.map((base) => {
-    let outfit: Omit<OutfitPick, 'score'> = { top: base.top, bottom: base.bottom, shoe: base.shoe };
+    let outfit: Omit<OutfitPick, 'score'> = { top: base.top, bottom: base.bottom, shoe: base.shoe, ...accessories };
     let current = base.s;
 
     if (layers.length > 0 && (forceLayer || needLayer || !tooHotForLayer)) {
-      let best: { layer: ScoringGarment; s: number } | null = null;
-      for (const layer of layers) {
-        const s = score(piecesOf({ ...outfit, layer }));
-        if (!best || s > best.s) best = { layer, s };
-      }
       // Required layers are always added; optional ones only when they clearly help.
-      if (best && (forceLayer || needLayer || best.s >= current + 2)) {
-        outfit = { ...outfit, layer: best.layer };
+      const best = bestAddition(layers, (layer) => ({ ...outfit, layer }), (s) => forceLayer || needLayer || s >= current + 2);
+      if (best) {
+        outfit = { ...outfit, layer: best.g };
         current = best.s;
       }
     }
 
     const wantsBelt = outfit.bottom.formality >= 3 && (outfit.top.typeSlug === 'shirt' || occasionFormality >= 3);
     if (belts.length > 0 && (wantsBelt || forceBelt)) {
-      let best: { belt: ScoringGarment; s: number } | null = null;
-      for (const belt of belts) {
-        const s = score(piecesOf({ ...outfit, belt }));
-        if (!best || s > best.s) best = { belt, s };
-      }
-      // Dress trousers in a shirt/business context need a belt; the score
-      // doesn't penalise a missing belt, so add the best one even if it costs
-      // a point or two (e.g. a slightly different brown from the shoes).
-      if (best) outfit = { ...outfit, belt: best.belt };
+      // A locked belt is always worn. Otherwise a belt is optional: the score
+      // doesn't penalise a missing one, so only add it when it doesn't make
+      // the outfit worse (e.g. never a brown belt with black shoes).
+      const best = bestAddition(belts, (belt) => ({ ...outfit, belt }), (s) => forceBelt || s >= current);
+      if (best) outfit = { ...outfit, belt: best.g };
     }
 
     return { ...outfit, score: scoreOutfit(piecesOf(outfit), ctx, lookups) };

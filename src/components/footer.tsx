@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, Palette, Shirt, Sparkles, Layers, Mail, Globe } from 'lucide-react';
+import { BookOpen, Palette, Shirt, Sparkles, Layers, Mail } from 'lucide-react';
 
 export function Footer() {
   return (
@@ -72,12 +72,6 @@ export function Footer() {
                 <a href="mailto:hello@styleiq.com" className="flex items-center gap-2 text-sm text-zinc-500 hover:text-amber-400 transition-colors">
                   <Mail className="w-3.5 h-3.5" />
                   hello@styleiq.com
-                </a>
-              </li>
-              <li>
-                <a href="#" className="flex items-center gap-2 text-sm text-zinc-500 hover:text-amber-400 transition-colors">
-                  <Globe className="w-3.5 h-3.5" />
-                  Website
                 </a>
               </li>
             </ul>

@@ -60,7 +60,7 @@ describe('slugify', () => {
 
 describe('validation limits', () => {
   it('bounds work a single request can trigger', () => {
-    expect(dailySuggestionSchema.safeParse({ garmentIds: Array.from({ length: 101 }, (_, i) => `g${i}`) }).success).toBe(false);
+    expect(dailySuggestionSchema.safeParse({ garmentIds: Array.from({ length: 501 }, (_, i) => `g${i}`) }).success).toBe(false);
     expect(dailySuggestionSchema.parse({ garmentIds: ['a', 'a', 'b'] }).garmentIds).toEqual(['a', 'b']);
     expect(pickerRecommendSchema.safeParse({ category: 'shirt', itemType: 'x', colorSlugs: Array(11).fill('navy') }).success).toBe(false);
     expect(registerSchema.safeParse({ email: 'a@b.co', password: 'p'.repeat(73) }).success).toBe(false);

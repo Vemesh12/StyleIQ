@@ -269,7 +269,7 @@
       "name": "Butter Yellow",
       "slug": "butter-yellow",
       "hex": "#EEDEA0",
-      "family": "Orange",
+      "family": "Yellow",
       "isNeutral": false
     },
     {
@@ -290,7 +290,7 @@
       "name": "Canary Yellow",
       "slug": "canary-yellow",
       "hex": "#F0DB4C",
-      "family": "Orange",
+      "family": "Yellow",
       "isNeutral": false
     },
     {
@@ -619,7 +619,7 @@
       "name": "Golden Yellow",
       "slug": "golden-yellow",
       "hex": "#E8BA30",
-      "family": "Orange",
+      "family": "Yellow",
       "isNeutral": false
     },
     {
@@ -780,7 +780,7 @@
       "name": "Lemon Yellow",
       "slug": "lemon-yellow",
       "hex": "#ECDF51",
-      "family": "Orange",
+      "family": "Yellow",
       "isNeutral": false
     },
     {
@@ -1025,49 +1025,49 @@
       "name": "Pastel Blue",
       "slug": "pastel-blue",
       "hex": "#C9DEED",
-      "family": "Pastel",
+      "family": "Blue",
       "isNeutral": false
     },
     {
       "name": "Pastel Green",
       "slug": "pastel-green",
       "hex": "#CCE1C1",
-      "family": "Pastel",
+      "family": "Green",
       "isNeutral": false
     },
     {
       "name": "Pastel Lavender",
       "slug": "pastel-lavender",
       "hex": "#DCD4ED",
-      "family": "Pastel",
+      "family": "Purple",
       "isNeutral": false
     },
     {
       "name": "Pastel Mint",
       "slug": "pastel-mint",
       "hex": "#C8EADC",
-      "family": "Pastel",
+      "family": "Green",
       "isNeutral": false
     },
     {
       "name": "Pastel Peach",
       "slug": "pastel-peach",
       "hex": "#F3D7C4",
-      "family": "Pastel",
+      "family": "Orange",
       "isNeutral": false
     },
     {
       "name": "Pastel Pink",
       "slug": "pastel-pink",
       "hex": "#F0D1DB",
-      "family": "Pastel",
+      "family": "Pink",
       "isNeutral": false
     },
     {
       "name": "Pastel Yellow",
       "slug": "pastel-yellow",
       "hex": "#EEE8C4",
-      "family": "Pastel",
+      "family": "Yellow",
       "isNeutral": false
     },
     {
@@ -1081,7 +1081,7 @@
       "name": "Pearl Champagne",
       "slug": "pearl-champagne",
       "hex": "#EAE4D7",
-      "family": "Pastel",
+      "family": "Neutral",
       "isNeutral": false
     },
     {
@@ -1172,7 +1172,7 @@
       "name": "Powder Pink",
       "slug": "powder-pink",
       "hex": "#E7C6CE",
-      "family": "Pastel",
+      "family": "Pink",
       "isNeutral": false
     },
     {
@@ -1305,7 +1305,7 @@
       "name": "Seashell Pink",
       "slug": "seashell-pink",
       "hex": "#F1E0DA",
-      "family": "Pastel",
+      "family": "Pink",
       "isNeutral": false
     },
     {
@@ -1361,7 +1361,7 @@
       "name": "Soft Ecru",
       "slug": "soft-ecru",
       "hex": "#EDE9DE",
-      "family": "Pastel",
+      "family": "Neutral",
       "isNeutral": false
     },
     {
@@ -1396,7 +1396,7 @@
       "name": "Sunflower Yellow",
       "slug": "sunflower-yellow",
       "hex": "#EEC72B",
-      "family": "Orange",
+      "family": "Yellow",
       "isNeutral": false
     },
     {
@@ -1487,7 +1487,7 @@
       "name": "Vanilla Pastel",
       "slug": "vanilla-pastel",
       "hex": "#EEE7D3",
-      "family": "Pastel",
+      "family": "Neutral",
       "isNeutral": false
     },
     {

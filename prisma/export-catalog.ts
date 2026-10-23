@@ -51,7 +51,11 @@ async function exportCatalog() {
   const primaryFirst = <T extends { isPrimary: boolean }>(rows: T[], key: (r: T) => string) =>
     [...rows].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || key(a).localeCompare(key(b)));
 
-  const compat = await prisma.compatibilityRule.findMany({ include: { garmentA: true, garmentB: true } });
+  // Same rule for compatibility pairs: skip any that involve a private item.
+  const compat = await prisma.compatibilityRule.findMany({
+    where: { garmentA: { ownerId: null }, garmentB: { ownerId: null } },
+    include: { garmentA: true, garmentB: true },
+  });
   const colorRules = await prisma.colorCompatibilityRule.findMany({ include: { colorA: true, colorB: true } });
   const guides = await prisma.guide.findMany();
   const styleRules = await prisma.styleRule.findMany();

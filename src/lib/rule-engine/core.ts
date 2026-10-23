@@ -20,7 +20,7 @@ import {
   WEATHER_RULES,
   type DimensionKey,
 } from './config';
-import { actsAsNeutral, colorPairScore, hexToHSL, type ColorInput, type ColorPairResult, type ColorRuleLookup } from './color-rules';
+import { actsAsNeutral, colorFamily, colorPairScore, hexToHSL, type ColorInput, type ColorPairResult, type ColorRuleLookup } from './color-rules';
 import { judgeColorForProfile, judgeFitForBody, judgePatternForBody, type ColorVerdict } from './personalization';
 import { ratingFromScore, type OutfitRating } from './rating';
 import { clamp, occasionSuitability } from './suitability';
@@ -42,6 +42,9 @@ export interface ScoringGarment {
   fits: string[]; // fit names, e.g. "Slim Fit"
   occasionSuitability: Record<string, number>; // occasionId -> 1-5 (curated rows)
   seasonSuitability: Record<string, number>; // seasonId -> 1-5 (curated rows)
+  // A user's private item (Garment.ownerId set). It has no public
+  // encyclopedia page, so the UI must not link to /encyclopedia/<slug>.
+  isOwn?: boolean;
 }
 
 export interface PersonalizationContext {
@@ -68,6 +71,8 @@ export interface RuleLookups {
 export interface DimensionResult {
   score: number; // 0..max
   max: number;
+  // False when the dimension didn't apply (no occasion picked) or there was
+  // nothing to judge (e.g. color/compatibility with only one piece).
   applied: boolean;
   note?: string;
 }
@@ -75,6 +80,12 @@ export interface DimensionResult {
 export interface OutfitScore {
   totalScore: number;
   rating: OutfitRating;
+  // False when no pair of pieces interacts (a single garment, only
+  // accessories, an empty list), so color and compatibility couldn't be
+  // judged. totalScore then reflects only the context dimensions (occasion,
+  // season, ...) that did apply, or 0 when none did — don't present it as an
+  // outfit score.
+  scorable: boolean;
   // Points per dimension on its own max (0 when not applied). Kept for the
   // existing UI; `dimensions` says which ones actually counted.
   breakdown: Record<DimensionKey, number>;
@@ -330,7 +341,12 @@ export function scoreOutfit(
   }
 
   // 1. COLOR HARMONY -------------------------------------------------------
-  let color10 = 8;
+  // Null = nothing to judge (fewer than two interacting colored pieces); the
+  // dimension is then dropped and the rest renormalized, like an unpicked
+  // occasion, instead of defaulting to a flattering constant.
+  let color10: number | null = null;
+  let colorAvg = 0;
+  let colorClash = false;
   let worstColorPair: OutfitScore['worstColorPair'] = null;
   const colorPairs = pairs.filter((p) => p.color);
   if (colorPairs.length > 0) {
@@ -341,6 +357,7 @@ export function scoreOutfit(
     const worst = (meaningful.length ? meaningful : colorPairs).reduce((m, p) => (p.color!.worst.pairScore < m.color!.worst.pairScore ? p : m));
     const worstScore = worst.color!.worst.pairScore;
     color10 = (1 - COLOR_WORST_PAIR_SHARE) * avg + COLOR_WORST_PAIR_SHARE * Math.min(avg, worstScore);
+    colorAvg = avg;
     worstColorPair = {
       a: worst.color!.worst.a,
       b: worst.color!.worst.b,
@@ -349,9 +366,8 @@ export function scoreOutfit(
       pairScore: worstScore,
     };
     if (worst.color!.worst.isClash) {
+      colorClash = true;
       add(3, `Color clash — ${worst.a.name} and ${worst.b.name}: ${worst.color!.worst.reason}`);
-    } else if (avg >= 9) {
-      highlights.push('The colors work together cleanly.');
     }
   }
 
@@ -360,19 +376,26 @@ export function scoreOutfit(
       .filter((g) => g.slot !== 'accessory' || g.typeSlug === 'tie')
       .map((g) => g.colors[0])
       .filter((c): c is ColorInput => !!c && !actsAsNeutral(c))
-      .map((c) => (c.family || c.name).trim().toLowerCase())
+      .map((c) => colorFamily(c).toLowerCase())
   );
-  if (chromaticFamilies.size >= 3) {
+  const tooManyColors = color10 !== null && chromaticFamilies.size >= 3;
+  if (color10 !== null && tooManyColors) {
     color10 -= THREE_COLOR_PENALTY;
     add(
       2,
       `Too many colors: ${chromaticFamilies.size} different color families (${[...chromaticFamilies].join(', ')}). Keep it to two colors and let neutrals do the rest.`
     );
   }
-  color10 = clamp(color10, 0, 10);
+  if (color10 !== null) color10 = clamp(color10, 0, 10);
+  // Decided on the FINAL color score, so the note can't praise colors the
+  // three-color penalty just marked down.
+  if (color10 !== null && !colorClash && !tooManyColors && colorAvg >= 9 && color10 >= 8.5) {
+    highlights.push('The colors work together cleanly.');
+  }
 
   // 2. GARMENT COMPATIBILITY --------------------------------------------------
-  let compat10 = 7;
+  let compat10: number | null = null;
+  const curatedPraise: string[] = [];
   let curatedPairs = 0;
   let totalPairs = 0;
   if (pairs.length > 0) {
@@ -391,7 +414,7 @@ export function scoreOutfit(
       } else if (r.curated && r.rating < 3 && r.reason) {
         add(3, `${r.p.a.name} + ${r.p.b.name}: ${r.reason}`);
       } else if (r.curated && r.rating >= 4.5 && r.reason) {
-        highlights.push(r.reason);
+        curatedPraise.push(r.reason);
       }
       const clash = patternClash(r.p.a, r.p.b);
       if (clash === 'bold') add(2, `${r.p.a.name} and ${r.p.b.name} are both bold patterns — pair a pattern with a solid or a much subtler pattern.`);
@@ -400,6 +423,9 @@ export function scoreOutfit(
     }
     curatedPairs = ratings.filter((r) => r.curated).length;
     totalPairs = ratings.length;
+    // A stylist's praise for one pair only reads as a highlight when the
+    // pieces work together overall.
+    if (compat10 >= 7.5) highlights.push(...curatedPraise);
   }
 
   const { gate, gap, low, high } = formalityGateFor(garments);
@@ -411,7 +437,7 @@ export function scoreOutfit(
 
   // 3. OCCASION MATCH --------------------------------------------------------
   let occasion10: number | null = null;
-  if (ctx.occasion) {
+  if (ctx.occasion && garments.length > 0) {
     const occ = ctx.occasion;
     const values = garments.map((g) => {
       // Missing curated row -> derive from formality instead of ignoring the piece.
@@ -425,12 +451,14 @@ export function scoreOutfit(
     const misfits = values.filter((x) => x.v <= 2).length;
     why.occasionMatch = misfits
       ? `${misfits} piece${misfits > 1 ? 's' : ''} ${misfits > 1 ? "don't" : "doesn't"} suit ${occ.name}.`
-      : `Every piece suits ${occ.name}.`;
+      : occasion10 >= 7
+        ? `Every piece suits ${occ.name}.`
+        : `Nothing is out of place for ${occ.name}, but few pieces are an ideal fit.`;
   }
 
   // 4. SEASON / WEATHER ------------------------------------------------------
   let season10: number | null = null;
-  if (ctx.season || ctx.weather) {
+  if ((ctx.season || ctx.weather) && garments.length > 0) {
     const weather = ctx.weather;
     const values = garments.map((g) => {
       let v = ctx.season ? g.seasonSuitability[ctx.season.id] ?? 3 : 3.5;
@@ -486,7 +514,7 @@ export function scoreOutfit(
           : 'Neutral colors near your face — neither helps nor hurts.';
       if (avoided.length) {
         add(2, `Near your face, ${avoided.join(', ')} isn't ideal for your coloring — try ${advice.recommendedClothingColors}.`);
-      } else if (sum / wSum > 0.4) {
+      } else if (sum / wSum > 0.4 && skin10 >= 7) {
         highlights.push('These colors suit your coloring.');
       }
     }
@@ -522,7 +550,9 @@ export function scoreOutfit(
       body10 = clamp(verdictTo10(sum / n), 0, 10);
       why.bodyTypeSuitability = avoidedFits.length
         ? `${avoidedFits.length} fit${avoidedFits.length > 1 ? 's are' : ' is'} less flattering for a ${bodyProportion.toLowerCase()} build.`
-        : `Fits and patterns work for a ${bodyProportion.toLowerCase()} build.`;
+        : body10 >= 7
+          ? `Fits and patterns work for a ${bodyProportion.toLowerCase()} build.`
+          : `Fits and patterns are neutral for a ${bodyProportion.toLowerCase()} build.`;
       if (avoidedFits.length) add(2, `For a ${bodyProportion.toLowerCase()} build, ${avoidedFits.join(', ')} is less flattering.`);
     }
   }
@@ -536,11 +566,14 @@ export function scoreOutfit(
     if (wantsBelt && !garments.some((g) => g.typeSlug === 'belt')) add(1, 'A belt matched to your shoes would finish this look.');
   }
 
-  if (worstColorPair) {
+  if (worstColorPair && color10 !== null) {
+    // Worded from the final color score (after the worst-pair blend and the
+    // three-color penalty), so the note never praises a low score.
     why.colorHarmony =
-      worstColorPair.pairScore < 6
+      colorClash || worstColorPair.pairScore < 6 || color10 < 6
         ? `Weakest pairing: ${worstColorPair.a} + ${worstColorPair.b} (${worstColorPair.harmony}).`
         : `Even the weakest pairing (${worstColorPair.a} + ${worstColorPair.b}) works: ${worstColorPair.harmony}.`;
+    if (tooManyColors) why.colorHarmony += ` ${chromaticFamilies.size} color families compete.`;
   }
   if (totalPairs > 0) {
     why.garmentCompatibility =
@@ -559,6 +592,8 @@ export function scoreOutfit(
     skinToneSuitability: skin10,
   };
   const notes: Partial<Record<DimensionKey, string>> = {
+    colorHarmony: 'Add another piece to judge how the colors work together.',
+    garmentCompatibility: 'Add another piece to judge how the pieces work together.',
     occasionMatch: 'Pick an occasion to include this.',
     seasonSuitability: 'Pick a season (or share your location) to include this.',
     bodyTypeSuitability: 'Add your body shape in the Style Advisor to include this.',
@@ -584,12 +619,16 @@ export function scoreOutfit(
     breakdown[key] = points;
   }
 
-  const totalScore = Math.round(clamp((weighted / weightSum) * 100 * gate, 0, 100));
+  // weightSum is 0 when nothing applied at all (empty list, lone accessory
+  // with no occasion) — score 0 instead of NaN.
+  const totalScore = weightSum > 0 ? Math.round(clamp((weighted / weightSum) * 100 * gate, 0, 100)) : 0;
+  const scorable = color10 !== null || compat10 !== null;
   const suggestions = [...new Map(issues.sort((x, y) => y.severity - x.severity).map((i) => [i.text, i.text])).values()];
 
   return {
     totalScore,
     rating: ratingFromScore(totalScore),
+    scorable,
     breakdown,
     dimensions,
     suggestions,

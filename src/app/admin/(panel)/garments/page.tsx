@@ -100,6 +100,7 @@ export default function AdminGarmentsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const applyData = useCallback((data: AdminData) => {
     setGarments(data.garments);
@@ -173,12 +174,34 @@ export default function AdminGarmentsPage() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this garment?')) return;
+    setDeleteError(null);
     try {
-      const res = await fetch(`/api/admin/garments?id=${id}`, { method: 'DELETE' });
-      if (!res.ok && res.status !== 404) alert('Could not delete the garment.');
+      const url = `/api/admin/garments?id=${encodeURIComponent(id)}`;
+      let res = await fetch(url, { method: 'DELETE' });
+      if (res.status === 409) {
+        // In use: show how much depends on it and let the admin decide.
+        const data = await res.json().catch(() => ({}));
+        const u = data.usage ?? {};
+        const parts = [
+          u.wardrobes ? `${u.wardrobes} closet(s)` : null,
+          u.savedOutfits ? `${u.savedOutfits} saved outfit(s)` : null,
+          u.wearLogs ? `${u.wearLogs} wear-history entr${u.wearLogs === 1 ? 'y' : 'ies'}` : null,
+        ].filter(Boolean);
+        const message = [
+          parts.length ? `This garment is in use: ${parts.join(', ')}.` : 'This garment is in use.',
+          'Delete anyway? Saved outfits that would be left incomplete are removed too.',
+        ].join('\n\n');
+        if (!confirm(message)) return;
+        res = await fetch(`${url}&force=1`, { method: 'DELETE' });
+      }
+      if (!res.ok && res.status !== 404) {
+        const data = await res.json().catch(() => ({}));
+        setDeleteError(data.error || 'Could not delete the garment.');
+      }
       fetchData();
     } catch (error) {
       console.error('Error deleting:', error);
+      setDeleteError('Could not delete the garment — check your connection.');
     }
   };
 
@@ -216,6 +239,9 @@ export default function AdminGarmentsPage() {
         </Button>
       </div>
 
+      {deleteError && (
+        <p role="alert" className="mb-6 text-sm text-red-400 bg-red-500/10 px-3 py-2 rounded-lg">{deleteError}</p>
+      )}
       {loadError && (
         <p className="mb-6 text-sm text-red-400 bg-red-500/10 px-3 py-2 rounded-lg">{loadError}</p>
       )}

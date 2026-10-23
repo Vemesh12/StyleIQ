@@ -1,40 +1,67 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useLayoutEffect, useSyncExternalStore } from 'react';
 import { Sun, Moon } from 'lucide-react';
+import { THEME_STORAGE_KEY } from '@/components/theme-script';
+
+type Theme = 'light' | 'dark';
+const THEME_EVENT = 'styleiq-theme-change';
+
+function readStoredTheme(): Theme {
+  try {
+    return localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
+function applyTheme(theme: Theme) {
+  document.documentElement.classList.toggle('dark', theme === 'dark');
+}
+
+// The <html> class is the source of truth; every toggle instance (desktop and
+// mobile navbar) re-reads it when it changes.
+const subscribe = (onChange: () => void) => {
+  window.addEventListener(THEME_EVENT, onChange);
+  return () => window.removeEventListener(THEME_EVENT, onChange);
+};
+const getSnapshot = (): Theme => (document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+// The server can't know the saved theme, so it (and hydration) render "light";
+// React then switches to the real value right after mount without a mismatch.
+const getServerSnapshot = (): Theme => 'light';
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof window === 'undefined') return 'light';
-    const saved = localStorage.getItem('styleiq_theme') as 'light' | 'dark' | null;
-    return saved || 'light';
-  });
+  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+  // In development React's remount can drop the class the inline script set;
+  // re-apply it before paint. No-op in production.
+  useLayoutEffect(() => {
+    const stored = readStoredTheme();
+    if (getSnapshot() !== stored) {
+      applyTheme(stored);
+      window.dispatchEvent(new Event(THEME_EVENT));
     }
-  }, [theme]);
+  }, []);
 
   const toggleTheme = () => {
-    const newTheme = theme === 'light' ? 'dark' : 'light';
-    setTheme(newTheme);
-    localStorage.setItem('styleiq_theme', newTheme);
-
-    if (newTheme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
+    const newTheme: Theme = theme === 'light' ? 'dark' : 'light';
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, newTheme);
+    } catch {
+      // Storage unavailable — the theme just won't persist.
     }
+    applyTheme(newTheme);
+    window.dispatchEvent(new Event(THEME_EVENT));
   };
 
+  const label = `Switch to ${theme === 'light' ? 'dark' : 'light'} mode`;
   return (
     <button
+      type="button"
       onClick={toggleTheme}
       className="p-2 rounded-lg border border-slate-300 dark:border-zinc-700 bg-white dark:bg-zinc-800 text-slate-700 dark:text-zinc-200 hover:bg-slate-100 dark:hover:bg-zinc-700 transition-all cursor-pointer shadow-2xs"
-      title={`Switch to ${theme === 'light' ? 'Dark' : 'Light'} Mode`}
+      title={label}
+      aria-label={label}
     >
       {theme === 'light' ? (
         <Moon className="w-4 h-4 text-zinc-700" />

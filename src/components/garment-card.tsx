@@ -3,6 +3,7 @@ import { StarRating } from '@/components/star-rating';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 import { GarmentIllustration } from '@/components/garment-illustration';
+import { compatibilityTypeForRating } from '@/lib/rule-engine/rating';
 
 // Fuzzy-matched (like CategoryIcon/GarmentIllustration) instead of an
 // exact-match lookup table, so new garment types (T-Shirt, Polo Shirt,
@@ -27,6 +28,8 @@ function gradientForType(garmentType: string): string {
   // Shirt / T-Shirt / Polo Shirt / Top — default
   return 'from-amber-500/10 to-orange-500/10 dark:from-amber-500/20 dark:to-orange-500/20 border-amber-200 dark:border-amber-900/40 text-amber-700 dark:text-amber-400';
 }
+
+const COMPATIBILITY_VARIANTS = ['excellent', 'good', 'acceptable', 'avoid'] as const;
 
 interface GarmentCardProps {
   name: string;
@@ -56,6 +59,12 @@ export function GarmentCard({
   badge,
 }: GarmentCardProps) {
   const styleClass = gradientForType(garmentType);
+  // Badge color follows the star rating when there is one (so a 2-star pair
+  // never shows a green badge); otherwise the stored type, if it's a known one.
+  const compatibilityVariant =
+    rating !== undefined
+      ? compatibilityTypeForRating(rating)
+      : COMPATIBILITY_VARIANTS.find((v) => v === compatibilityType) ?? 'outline';
 
   const card = (
       <Card className="group hover:border-amber-500/50 hover:shadow-xl hover:-translate-y-1 transition-all duration-300 overflow-hidden h-full bg-white dark:bg-zinc-900 border border-slate-200/90 dark:border-zinc-800 flex flex-col justify-between">
@@ -72,7 +81,7 @@ export function GarmentCard({
           )}
           {compatibilityType && (
             <div className="absolute top-2 right-2">
-              <Badge variant={compatibilityType as 'excellent' | 'good' | 'acceptable' | 'avoid'}>
+              <Badge variant={compatibilityVariant}>
                 {compatibilityType}
               </Badge>
             </div>

@@ -51,4 +51,34 @@ export async function getUserSession(): Promise<UserSession | null> {
   });
 }
 
+// Emails are stored lowercased (see the lowercase_emails migration), so an
+// exact match on the normalized email is the normal path. The case-insensitive
+// fallback covers any legacy mixed-case row the migration had to leave alone
+// because a lowercase twin already existed.
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+export async function findUserByEmail(email: string) {
+  const normalized = normalizeEmail(email);
+  return (
+    (await prisma.user.findUnique({ where: { email: normalized } })) ??
+    (await prisma.user.findFirst({
+      where: { email: { equals: normalized, mode: 'insensitive' } },
+      orderBy: { createdAt: 'asc' },
+    }))
+  );
+}
+
+export async function findAdminByEmail(email: string) {
+  const normalized = normalizeEmail(email);
+  return (
+    (await prisma.adminUser.findUnique({ where: { email: normalized } })) ??
+    (await prisma.adminUser.findFirst({
+      where: { email: { equals: normalized, mode: 'insensitive' } },
+      orderBy: { createdAt: 'asc' },
+    }))
+  );
+}
+
 export { ADMIN_COOKIE_NAME, USER_COOKIE_NAME };

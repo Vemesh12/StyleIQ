@@ -1,7 +1,7 @@
 // Pure personalization matching (no database access). The rule lookup that
 // reads the personalization table lives in catalog.ts.
 import type { PersonalizationRule } from '@prisma/client';
-import { hexToHSL, type ColorInput } from './color-rules';
+import { colorFamily, hexToHSL, type ColorInput } from './color-rules';
 import { PATTERN_SCALE } from './config';
 
 export interface StyleProfile {
@@ -29,7 +29,8 @@ function factsFor(c: ColorInput): ColorFacts {
   const { h, s, l } = hexToHSL(c.hex);
   return {
     words: new Set(c.name.toLowerCase().split(/[^a-z]+/).filter(Boolean)),
-    family: (c.family || '').toLowerCase(),
+    // Derived from the color itself, so a mislabelled catalog family can't skew advice.
+    family: colorFamily(c).toLowerCase(),
     h,
     // Wardrobe neutrals (navy, charcoal, camel...) are treated as achromatic,
     // so hue-based concepts like "Jewel Tones" or "Cool Blue" never catch

@@ -27,7 +27,9 @@ export async function POST(request: NextRequest) {
     const report = await runImport(kind, csv, dryRun);
     if (report.written) {
       invalidateEngineCache();
-      revalidatePublicContent(kind === 'garments' ? 'garments' : 'compatibility');
+      // Color rules feed the /colors guide, which the 'garments' set covers
+      // (same as the color-rules admin route).
+      revalidatePublicContent(kind === 'compatibility' ? 'compatibility' : 'garments');
     }
     return NextResponse.json(report, { status: report.errors.length ? 422 : 200 });
   } catch (error) {

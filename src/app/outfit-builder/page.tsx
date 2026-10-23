@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { Card, CardTitle } from '@/components/ui/card';
+import { SelectableCard } from '@/components/ui/selectable-card';
 import { Button } from '@/components/ui/button';
 import { OutfitScoreDisplay } from '@/components/outfit-score-display';
 import { StarRating } from '@/components/star-rating';
@@ -60,6 +61,8 @@ interface ScoreBreakdown {
 
 interface OutfitScoreResult {
   totalScore: number;
+  // False when nothing could be judged (e.g. only one piece): no score to show.
+  scorable?: boolean;
   breakdown: ScoreBreakdown;
   dimensions: Record<string, { score: number; max: number; applied: boolean; note?: string }>;
   rating: string;
@@ -92,7 +95,10 @@ export default function OutfitBuilderPage() {
   const [scoreResult, setScoreResult] = useState<OutfitScoreResult | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [saving, setSaving] = useState<boolean>(false);
-  const [saved, setSaved] = useState<boolean>(false);
+  // Which outfit (garments + context) was saved, so changing any piece
+  // re-enables the save button instead of showing a stale "Saved".
+  const [savedKey, setSavedKey] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState<boolean>(false);
 
   useEffect(() => {
@@ -173,9 +179,22 @@ export default function OutfitBuilderPage() {
     }
   };
 
+  const outfitKey = [
+    selectedShirt?.id,
+    selectedLayer?.id,
+    selectedTrouser?.id,
+    selectedShoe?.id,
+    selectedBelt?.id,
+    selectedOccasion?.id,
+    selectedSeason?.id,
+  ].join('|');
+  const saved = savedKey === outfitKey;
+
   const handleSaveOutfit = async () => {
     if (!selectedShirt || !selectedTrouser || !selectedShoe) return;
     setSaving(true);
+    setSaveError(null);
+    const keyAtSave = outfitKey;
     try {
       const garmentIds = [
         selectedShirt.id,
@@ -205,10 +224,14 @@ export default function OutfitBuilderPage() {
       }
 
       if (res.ok) {
-        setSaved(true);
+        setSavedKey(keyAtSave);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setSaveError(data.error || 'Could not save this outfit — please try again.');
       }
     } catch (err) {
       console.error(err);
+      setSaveError('Could not save this outfit — check your connection and try again.');
     } finally {
       setSaving(false);
     }
@@ -225,7 +248,8 @@ export default function OutfitBuilderPage() {
     setSelectedBelt(null);
     setScoreResult(null);
     setScoreError(null);
-    setSaved(false);
+    setSavedKey(null);
+    setSaveError(null);
   };
 
   return (
@@ -296,19 +320,20 @@ export default function OutfitBuilderPage() {
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {occasions.map((occ) => (
-              <Card
+              <SelectableCard
                 key={occ.id}
-                onClick={() => {
+                selected={selectedOccasion?.id === occ.id}
+                onSelect={() => {
                   setSelectedOccasion(occ);
                   setStep(2);
                 }}
-                className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-6 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 ${selectedOccasion?.id === occ.id ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20' : ''
+                className={`hover:border-amber-500 hover:shadow-xl transition-all p-6 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 ${selectedOccasion?.id === occ.id ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20' : ''
                   }`}
               >
                 <CardTitle className="text-lg text-slate-900 dark:text-white mb-2">{occ.name}</CardTitle>
                 <StarRating rating={occ.formalityLevel} size="sm" className="mb-3" />
                 <p className="text-xs text-slate-600 dark:text-zinc-400 leading-relaxed font-medium">{occ.description}</p>
-              </Card>
+              </SelectableCard>
             ))}
           </div>
         </div>
@@ -322,18 +347,19 @@ export default function OutfitBuilderPage() {
           </h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {seasons.map((s) => (
-              <Card
+              <SelectableCard
                 key={s.id}
-                onClick={() => {
+                selected={selectedSeason?.id === s.id}
+                onSelect={() => {
                   setSelectedSeason(s);
                   setStep(3);
                 }}
-                className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-6 text-center bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 ${selectedSeason?.id === s.id ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20' : ''
+                className={`hover:border-amber-500 hover:shadow-xl transition-all p-6 text-center bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 ${selectedSeason?.id === s.id ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20' : ''
                   }`}
               >
                 <Sun className="w-8 h-8 text-amber-600 dark:text-amber-400 mx-auto mb-3" />
                 <CardTitle className="text-base text-slate-900 dark:text-white">{s.name}</CardTitle>
-              </Card>
+              </SelectableCard>
             ))}
           </div>
           <div className="flex justify-between pt-4">
@@ -375,12 +401,13 @@ export default function OutfitBuilderPage() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {/* Skip Layer Option */}
-            <Card
-              onClick={() => {
+            <SelectableCard
+              selected={selectedLayer === null}
+              onSelect={() => {
                 setSelectedLayer(null);
                 setStep(5);
               }}
-              className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-dashed border-2 border-slate-300 dark:border-zinc-700 flex flex-col justify-between items-center text-center ${selectedLayer === null ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
+              className={`hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-dashed border-2 border-slate-300 dark:border-zinc-700 flex flex-col justify-between items-center text-center ${selectedLayer === null ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
                 }`}
             >
               <div className="p-4 rounded-full bg-slate-100 dark:bg-zinc-800 text-slate-500 dark:text-zinc-400 mb-3">
@@ -394,19 +421,11 @@ export default function OutfitBuilderPage() {
                   Single shirt & trouser look (ideal for warm weather or relaxed styles)
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full text-xs font-semibold"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedLayer(null);
-                  setStep(5);
-                }}
-              >
+              {/* Not a nested button: the whole card is the control. */}
+              <span className="w-full rounded-lg border border-slate-300 dark:border-zinc-700 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-zinc-200">
                 Continue without layer →
-              </Button>
-            </Card>
+              </span>
+            </SelectableCard>
 
             <GarmentChoiceCards items={layers} selectedId={selectedLayer?.id} onSelect={(g) => { setSelectedLayer(g); setStep(5); }} category="jacket" accent="purple" />
           </div>
@@ -472,14 +491,15 @@ export default function OutfitBuilderPage() {
             </p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            <Card
-              onClick={() => setSelectedBelt(null)}
-              className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-dashed border-2 border-slate-300 dark:border-zinc-700 flex flex-col items-center justify-center text-center ${selectedBelt === null ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
+            <SelectableCard
+              selected={selectedBelt === null}
+              onSelect={() => setSelectedBelt(null)}
+              className={`hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-dashed border-2 border-slate-300 dark:border-zinc-700 flex flex-col items-center justify-center text-center ${selectedBelt === null ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
                 }`}
             >
               <CardTitle className="text-base font-bold text-slate-900 dark:text-white mb-1">No Belt</CardTitle>
               <p className="text-xs text-slate-500 dark:text-zinc-400">Fine for t-shirts, polos and relaxed looks</p>
-            </Card>
+            </SelectableCard>
             <GarmentChoiceCards items={belts} selectedId={selectedBelt?.id} onSelect={setSelectedBelt} category="belt" accent="amber" />
           </div>
           <div className="flex justify-between pt-6">
@@ -516,14 +536,30 @@ export default function OutfitBuilderPage() {
             </Card>
           ) : scoreResult ? (
             <div className="space-y-6">
-              <OutfitScoreDisplay
-                totalScore={scoreResult.totalScore}
-                breakdown={scoreResult.breakdown}
-                dimensions={scoreResult.dimensions}
-                rating={scoreResult.rating}
-                suggestions={scoreResult.suggestions}
-                highlights={scoreResult.highlights}
-              />
+              {scoreResult.scorable === false ? (
+                <Card className="p-8 text-center bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 space-y-2">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-white">Add another piece to get a score</h3>
+                  <p className="text-sm text-slate-500 dark:text-zinc-400">
+                    There isn&apos;t enough here to judge colors or how the pieces go together yet.
+                  </p>
+                  {scoreResult.suggestions?.length > 0 && (
+                    <ul className="text-sm text-slate-600 dark:text-zinc-300 pt-2 space-y-1">
+                      {scoreResult.suggestions.map((s) => (
+                        <li key={s}>{s}</li>
+                      ))}
+                    </ul>
+                  )}
+                </Card>
+              ) : (
+                <OutfitScoreDisplay
+                  totalScore={scoreResult.totalScore}
+                  breakdown={scoreResult.breakdown}
+                  dimensions={scoreResult.dimensions}
+                  rating={scoreResult.rating}
+                  suggestions={scoreResult.suggestions}
+                  highlights={scoreResult.highlights}
+                />
+              )}
               <p className="text-center text-xs text-slate-500 dark:text-zinc-400">
                 {scoreResult.personalization?.matchedOn.length ? (
                   'Personalized with your saved Style Profile.'
@@ -538,6 +574,11 @@ export default function OutfitBuilderPage() {
                 )}
               </p>
 
+              {saveError && (
+                <p role="alert" className="text-center text-sm font-medium text-rose-600 dark:text-rose-400">
+                  {saveError}
+                </p>
+              )}
               <div className="flex justify-center gap-4 pt-4">
                 <Button variant="outline" onClick={resetAll} size="lg">
                   <RotateCcw className="w-4 h-4" /> Build Another Outfit

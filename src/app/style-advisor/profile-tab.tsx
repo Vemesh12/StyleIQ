@@ -11,7 +11,7 @@ import {
   CheckCircle2,
   ShieldAlert,
   } from 'lucide-react';
-import { persistStyleProfile } from '@/lib/style-profile';
+import { loadStyleProfile, persistStyleProfile } from '@/lib/style-profile';
 import type { Options, PersonalizationResult } from './advisor-data';
 
 const EMPTY_PROFILE = { hairColor: '', eyeColor: '', skinTone: '', underTone: '', torsoLength: '', bodyProportion: '' };
@@ -24,6 +24,8 @@ export function ProfileTab() {
   const [result, setResult] = useState<PersonalizationResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // True when the form was pre-filled from the profile saved earlier.
+  const [hasSavedProfile, setHasSavedProfile] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -36,14 +38,20 @@ export function ProfileTab() {
         if (!active) return;
         setOptions(data);
         if (data.hairColors?.length) {
+          // Start from the saved profile (when its values are still valid
+          // options), so returning users see — and can edit — what they chose.
+          const saved = loadStyleProfile();
+          const pick = (list: string[] | undefined, value: string | undefined) =>
+            value && list?.includes(value) ? value : list?.[0] || '';
           setProfile({
-            hairColor: data.hairColors[0],
-            eyeColor: data.eyeColors[0] || '',
-            skinTone: data.skinTones[0] || '',
-            underTone: data.underTones[0] || '',
-            torsoLength: data.torsoLengths[0] || '',
-            bodyProportion: data.bodyProportions[0] || '',
+            hairColor: pick(data.hairColors, saved?.hairColor),
+            eyeColor: pick(data.eyeColors, saved?.eyeColor),
+            skinTone: pick(data.skinTones, saved?.skinTone),
+            underTone: pick(data.underTones, saved?.underTone),
+            torsoLength: pick(data.torsoLengths, saved?.torsoLength),
+            bodyProportion: pick(data.bodyProportions, saved?.bodyProportion),
           });
+          setHasSavedProfile(!!saved && Object.values(saved).some(Boolean));
         }
       })
       .catch((e) => {
@@ -72,6 +80,7 @@ export function ProfileTab() {
         // outfit builder, quick pick and daily suggestion personalize too.
         // Also stored on the account when signed in, so it follows them across devices.
         await persistStyleProfile(profile);
+        setHasSavedProfile(true);
       } else {
         setError(data.error || 'Could not generate your profile.');
       }
@@ -104,6 +113,11 @@ export function ProfileTab() {
                   <UserCheck className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                   Your Physical Profile
                 </CardTitle>
+                {hasSavedProfile && (
+                  <p className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
+                    Showing your saved Style Profile — change anything and regenerate to update it.
+                  </p>
+                )}
               </CardHeader>
               <CardContent className="space-y-4">
                 {/* Hair Color */}

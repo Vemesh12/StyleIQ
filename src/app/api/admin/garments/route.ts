@@ -19,6 +19,11 @@ async function checkAdmin() {
   return null;
 }
 
+const COLORS_PRIMARY_FIRST = {
+  include: { color: true },
+  orderBy: { isPrimary: 'desc' },
+} satisfies Prisma.Garment$colorsArgs;
+
 const ERRORS = {
   unique: 'That slug is already used by another garment.',
   foreignKey: 'The selected garment type or one of the colors no longer exists.',
@@ -93,7 +98,8 @@ export async function GET() {
     where: { ownerId: null },
     include: {
       garmentType: true,
-      colors: { include: { color: true } },
+      // Primary color first, so the edit form's colorIds[0] stays the primary.
+      colors: COLORS_PRIMARY_FIRST,
       fits: { include: { fit: true } },
       materials: { include: { material: true } },
       patterns: { include: { pattern: true } },
@@ -109,7 +115,7 @@ export async function POST(request: NextRequest) {
   if (authError) return authError;
 
   try {
-    const parsed = adminGarmentCreateSchema.safeParse(await request.json());
+    const parsed = adminGarmentCreateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
@@ -139,7 +145,7 @@ export async function POST(request: NextRequest) {
             ? { create: [...new Set(colorIds)].map((colorId, i) => ({ colorId, isPrimary: i === 0 })) }
             : undefined,
         },
-        include: { garmentType: true, colors: { include: { color: true } } },
+        include: { garmentType: true, colors: COLORS_PRIMARY_FIRST },
       });
       await replaceSingleAttributes(tx, created.id, { fitSlug, materialSlug, patternSlug });
       await writeOccasionSuitability(tx, created.id, formality);
@@ -163,7 +169,7 @@ export async function PUT(request: NextRequest) {
   if (authError) return authError;
 
   try {
-    const parsed = adminGarmentUpdateSchema.safeParse(await request.json());
+    const parsed = adminGarmentUpdateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
@@ -192,7 +198,7 @@ export async function PUT(request: NextRequest) {
       const updated = await tx.garment.update({
         where: { id },
         data: { name, slug: finalSlug, garmentTypeId, description, formalityLevel: formality },
-        include: { garmentType: true, colors: { include: { color: true } } },
+        include: { garmentType: true, colors: COLORS_PRIMARY_FIRST },
       });
 
       await replaceSingleAttributes(tx, id, { fitSlug, materialSlug, patternSlug });
@@ -221,14 +227,60 @@ export async function DELETE(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const id = searchParams.get('id');
+  const force = searchParams.get('force') === '1';
 
   if (!id) {
     return NextResponse.json({ error: 'ID is required' }, { status: 400 });
   }
 
-  const { count } = await prisma.garment.deleteMany({ where: { id, ownerId: null } });
-  if (count === 0) return NextResponse.json({ error: ERRORS.notFound }, { status: 404 });
-  invalidateEngineCache();
-  revalidatePublicContent('garments');
-  return NextResponse.json({ success: true });
+  try {
+    const garment = await prisma.garment.findFirst({ where: { id, ownerId: null }, select: { id: true } });
+    if (!garment) return NextResponse.json({ error: ERRORS.notFound }, { status: 404 });
+
+    // Deleting a garment people use silently empties closets and breaks saved
+    // outfits, so it needs an explicit ?force=1 once the admin has seen this.
+    const [wardrobes, outfitItems, wearLogs] = await Promise.all([
+      prisma.digitalWardrobe.count({ where: { garmentId: id } }),
+      prisma.savedOutfitItem.findMany({ where: { garmentId: id }, select: { outfitId: true } }),
+      prisma.wearLog.count({ where: { garmentIds: { has: id } } }),
+    ]);
+    const outfitIds = [...new Set(outfitItems.map((i) => i.outfitId))];
+    const usage = { wardrobes, savedOutfits: outfitIds.length, wearLogs };
+    if (!force && (wardrobes > 0 || outfitIds.length > 0 || wearLogs > 0)) {
+      return NextResponse.json(
+        { error: 'This garment is in use. Delete it anyway with force=1.', usage },
+        { status: 409 }
+      );
+    }
+
+    const removedOutfits = await prisma.$transaction(async (tx) => {
+      const affected = (await tx.savedOutfitItem.findMany({ where: { garmentId: id }, select: { outfitId: true } })).map(
+        (i) => i.outfitId
+      );
+      const { count } = await tx.garment.deleteMany({ where: { id, ownerId: null } });
+      if (count === 0) return null;
+      // Wardrobe entries and outfit items cascade; an outfit left with fewer
+      // than 2 pieces isn't an outfit any more. Wear logs keep the id and show
+      // it as "Removed item".
+      const broken = affected.length
+        ? await tx.savedOutfit.findMany({
+            where: { id: { in: affected } },
+            select: { id: true, _count: { select: { items: true } } },
+          })
+        : [];
+      const toRemove = broken.filter((o) => o._count.items < 2).map((o) => o.id);
+      if (toRemove.length) await tx.savedOutfit.deleteMany({ where: { id: { in: toRemove } } });
+      return toRemove.length;
+    });
+    if (removedOutfits === null) return NextResponse.json({ error: ERRORS.notFound }, { status: 404 });
+
+    invalidateEngineCache();
+    revalidatePublicContent('garments');
+    return NextResponse.json({ success: true, usage, removedOutfits });
+  } catch (error) {
+    const clientError = clientErrorResponse(error, ERRORS);
+    if (clientError) return clientError;
+    console.error('Error deleting garment:', error);
+    return NextResponse.json({ error: 'Failed to delete garment' }, { status: 500 });
+  }
 }

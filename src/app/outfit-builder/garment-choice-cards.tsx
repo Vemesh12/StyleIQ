@@ -1,4 +1,5 @@
-import { Card, CardTitle } from '@/components/ui/card';
+import { CardTitle } from '@/components/ui/card';
+import { SelectableCard } from '@/components/ui/selectable-card';
 import { GarmentIllustration } from '@/components/garment-illustration';
 import { StarRating } from '@/components/star-rating';
 
@@ -41,20 +42,12 @@ export function GarmentChoiceCards({
       {items.map((item) => {
         const selected = selectedId === item.id;
         return (
-          <Card
+          <SelectableCard
             key={item.id}
-            role="button"
-            tabIndex={0}
-            aria-pressed={selected}
+            selected={selected}
             aria-label={`${item.name}, formality ${item.formalityLevel} of 5`}
-            onClick={() => onSelect(item)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                onSelect(item);
-              }
-            }}
-            className={`cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 flex flex-col justify-between focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 ${
+            onSelect={() => onSelect(item)}
+            className={`hover:border-amber-500 hover:shadow-xl transition-all p-5 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 flex flex-col justify-between ${
               selected ? 'border-amber-600 dark:border-amber-500 ring-2 ring-amber-500/20 bg-amber-500/5' : ''
             }`}
           >
@@ -71,7 +64,7 @@ export function GarmentChoiceCards({
               <span className="text-xs text-slate-500 dark:text-zinc-400 font-semibold uppercase tracking-wider">Formality</span>
               <StarRating rating={item.formalityLevel} size="sm" />
             </div>
-          </Card>
+          </SelectableCard>
         );
       })}
     </>

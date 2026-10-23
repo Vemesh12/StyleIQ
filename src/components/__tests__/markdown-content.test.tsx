@@ -22,6 +22,14 @@ describe('MarkdownContent', () => {
     expect(html).toContain('noopener');
     expect(html).not.toContain('<script>');
   });
+
+  it('treats protocol-relative links as unsafe, but keeps site paths', () => {
+    const html = render('[a](//evil.example/x) [b](/\\evil.example) [c](/guides/fit) [d](#top)');
+    expect(html).not.toContain('evil.example');
+    expect(html).toContain('href="/guides/fit"');
+    expect(html).toContain('href="#top"');
+    expect(html).not.toContain('target="_blank"');
+  });
 });
 
 describe('readingMinutes', () => {

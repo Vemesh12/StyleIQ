@@ -7,6 +7,7 @@ import { cn } from '@/lib/utils';
 import { AuthModal } from '@/components/auth-modal';
 import { reconcileStyleProfile } from '@/lib/style-profile';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { AUTH_CHANGED_EVENT, clearLocalUserState, notifyAuthChanged } from '@/components/auth-events';
 import {
   BookOpen,
   Palette,
@@ -50,14 +51,32 @@ export function Navbar() {
         if (data.user) void reconcileStyleProfile(data.styleProfile);
       })
       .catch(() => active && setUser(null));
+
+    // Sign-in/out from any auth modal or page updates the navbar too.
+    const onAuthChanged = (e: Event) => {
+      const detail = (e as CustomEvent<{ user: { id: string; name: string; email: string } | null }>).detail;
+      setUser(detail?.user ?? null);
+    };
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
     return () => {
       active = false;
+      window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
     };
   }, []);
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' });
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Still clear this browser's copy of the person's data below.
+    }
+    // Don't leave this person's style profile / history for the next user of
+    // this browser.
+    clearLocalUserState();
     setUser(null);
+    setMobileOpen(false);
+    notifyAuthChanged(null);
+    // Pages hold per-user data in memory (closet, saved outfits); start clean.
     window.location.reload();
   };
 
@@ -111,7 +130,9 @@ export function Navbar() {
                     {user.name || user.email}
                   </div>
                   <button
+                    type="button"
                     onClick={handleLogout}
+                    aria-label="Logout"
                     className="p-2 rounded-lg text-slate-500 dark:text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors"
                     title="Logout"
                   >
@@ -133,7 +154,11 @@ export function Navbar() {
             <div className="flex items-center gap-2 lg:hidden">
               <ThemeToggle />
               <button
+                type="button"
                 onClick={() => setMobileOpen(!mobileOpen)}
+                aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+                aria-expanded={mobileOpen}
+                aria-controls="mobile-nav"
                 className="p-2 rounded-lg text-slate-600 dark:text-zinc-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-zinc-800 transition-colors"
               >
                 {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -144,7 +169,7 @@ export function Navbar() {
 
         {/* Mobile nav */}
         {mobileOpen && (
-          <div className="lg:hidden border-t border-slate-200 dark:border-zinc-800 bg-white/98 dark:bg-zinc-950/98 backdrop-blur-xl">
+          <div id="mobile-nav" className="lg:hidden border-t border-slate-200 dark:border-zinc-800 bg-white/98 dark:bg-zinc-950/98 backdrop-blur-xl">
             <div className="px-4 py-3 space-y-1">
               {navLinks.map((link) => {
                 const isActive = pathname === link.href || pathname?.startsWith(link.href + '/');
@@ -193,8 +218,8 @@ export function Navbar() {
         isOpen={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
         onSuccess={(u) => {
+          // The modal also fires the auth-changed event, which pages listen to.
           setUser(u);
-          window.location.reload();
         }}
       />
     </>

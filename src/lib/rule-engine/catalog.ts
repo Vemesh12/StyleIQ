@@ -54,6 +54,7 @@ function toScoringGarment(g: GarmentRow): ScoringGarment {
     fits: primaryFirst(g.fits).map((f) => f.fit.name),
     occasionSuitability: Object.fromEntries(g.occasions.map((o) => [o.occasionId, o.suitability])),
     seasonSuitability: Object.fromEntries(g.seasons.map((s) => [s.seasonId, s.suitability])),
+    isOwn: g.ownerId !== null,
   };
 }
 

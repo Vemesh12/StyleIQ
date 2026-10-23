@@ -1,39 +1,38 @@
-import { prisma } from '@/lib/prisma';
-import { createAdminToken, ADMIN_COOKIE_NAME } from '@/lib/auth';
+import { createAdminToken, findAdminByEmail, ADMIN_COOKIE_NAME } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPassword } from '@/lib/password';
 import { loginSchema } from '@/lib/validation';
-import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
+import { enforceLoginRateLimits, getClientIp, recordLoginFailure, type LoginLimits } from '@/lib/rate-limit';
+
+const ADMIN_LOGIN_LIMITS: LoginLimits = {
+  scope: 'admin-login',
+  ipAccountLimit: 5,
+  ipLimit: 15,
+  accountFailureLimit: 10,
+  windowMs: 15 * 60 * 1000,
+};
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => null);
     const parsed = loginSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const { email, password } = parsed.data;
 
+    // The per-account bucket only counts failures and is bypassed by IPs with
+    // no recent failures, so nobody can lock the admin out by spamming logins.
     const ip = getClientIp(request);
-    const account = email.toLowerCase();
-    const WINDOW = 15 * 60 * 1000;
-    const limited = await enforceRateLimits(
-      [
-        { key: `admin-login:ip-acct:${ip}:${account}`, limit: 5, windowMs: WINDOW },
-        { key: `admin-login:acct:${account}`, limit: 10, windowMs: WINDOW },
-        { key: `admin-login:ip:${ip}`, limit: 15, windowMs: WINDOW },
-      ],
-      'Too many login attempts. Please try again later.'
-    );
+    const limited = await enforceLoginRateLimits(ADMIN_LOGIN_LIMITS, ip, email);
     if (limited) return limited;
 
-    const admin = await prisma.adminUser.findUnique({
-      where: { email },
-    });
+    const admin = await findAdminByEmail(email);
 
     // Constant-work check: unknown email and wrong password take the same time.
     const valid = await verifyPassword(password, admin?.password);
     if (!admin || !valid) {
+      await recordLoginFailure(ADMIN_LOGIN_LIMITS, ip, email);
       return NextResponse.json(
         { error: 'Invalid credentials' },
         { status: 401 }

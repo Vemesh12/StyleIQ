@@ -45,10 +45,18 @@ export const SLOT_PAIR_WEIGHTS: Record<string, number> = {
 
 // Accessories only interact with the pieces they physically sit against;
 // e.g. a belt is judged against the shoes and trousers, not the jacket.
+// Inner keys are slots, or accessory type slugs for accessory-accessory pairs.
+// A type missing here interacts with nothing and is ignored by the color and
+// compatibility dimensions, so every accessory type in slots.ts needs a row.
+// Watches and misc accessories (bags, scarves...) stay below 0.5 so they can
+// nudge the score but never be "the worst pair" that drags the look down.
 export const ACCESSORY_PAIR_WEIGHTS: Record<string, Record<string, number>> = {
-  belt: { footwear: 1.0, bottom: 0.6 },
+  belt: { footwear: 1.0, bottom: 0.6, top: 0.3 },
   tie: { top: 1.0, layer: 0.6 },
   'pocket-square': { layer: 1.0, tie: 0.6 },
+  // Sits at the cuff; a leather strap is matched to the belt and shoes.
+  watch: { top: 0.4, layer: 0.4, belt: 0.4, footwear: 0.3 },
+  accessory: { top: 0.3, layer: 0.3, bottom: 0.2 },
 };
 
 // Outfit color score = blend of the weighted average pair and the single

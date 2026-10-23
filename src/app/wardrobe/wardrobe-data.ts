@@ -10,6 +10,8 @@ export interface DailyOutfitItem {
   slug?: string;
   typeSlug?: string;
   colors: { name: string; hex: string }[];
+  /** The person's own (private) garment — no encyclopedia page. */
+  isOwn?: boolean;
 }
 
 export interface SavedOutfitRow {
@@ -40,6 +42,7 @@ export interface DailySuggestion {
     shoe: DailyOutfitItem;
     layer: DailyOutfitItem | null;
     belt: DailyOutfitItem | null;
+    accessories?: DailyOutfitItem[];
     highlights: string[];
     suggestions: string[];
   } | null;
@@ -111,6 +114,15 @@ export async function loadWardrobeData(): Promise<WardrobeData> {
     fetchAllGarments().catch((): AllGarment[] => []),
     fetch('/api/user/outfits'),
   ]);
+  // Only a 401 means "guest". Any other failure (500, network, rate limit) is
+  // an error — treating it as guest mode would show a signed-in person an
+  // empty browser-only closet.
+  if (!wRes.ok && wRes.status !== 401) {
+    throw new Error(`Loading the closet failed (${wRes.status})`);
+  }
+  if (!oRes.ok && oRes.status !== 401) {
+    throw new Error(`Loading saved outfits failed (${oRes.status})`);
+  }
   const savedOutfits: SavedOutfitRow[] = oRes.ok ? await oRes.json() : [];
 
   if (wRes.ok) {

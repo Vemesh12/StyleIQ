@@ -26,8 +26,8 @@ export const IMPORT_COLUMNS: Record<ImportKind, { required: string[]; optional: 
   },
   colorRules: {
     required: ['a', 'b', 'score', 'harmony'],
-    optional: ['reason'],
-    example: 'a,b,score,harmony,reason\nnavy-blue,camel,9.6,Classic Pairing,"Warm camel softens navy"',
+    optional: ['reason', 'ruleType'],
+    example: 'a,b,score,harmony,reason,ruleType\nnavy-blue,camel,9.6,Classic Pairing,"Warm camel softens navy",curated',
   },
 };
 
@@ -225,6 +225,7 @@ async function planColorRules(records: { line: number; values: Record<string, st
     const score = num(v.score);
     if (!(score >= 0 && score <= 10)) problems.push('score must be between 0 and 10');
     if (!v.harmony || v.harmony.length > 60) problems.push('harmony label is required (max 60 characters)');
+    if (v.ruleType && v.ruleType.length > 60) problems.push('ruleType must be at most 60 characters');
     const key = a && b ? [a, b].sort().join('|') : '';
     if (key && seen.has(key)) problems.push('this pair appears twice in the file');
     seen.add(key);
@@ -233,13 +234,16 @@ async function planColorRules(records: { line: number; values: Record<string, st
       continue;
     }
     const existingId = ruleBy.get(key);
-    const data = { score, harmony: v.harmony, reason: v.reason ?? '', ruleType: 'curated' };
+    // ruleType is kept: a row without one leaves an existing rule's tag alone
+    // and new rules default to 'curated'.
+    const ruleType = v.ruleType?.trim() || undefined;
+    const data = { score, harmony: v.harmony, reason: v.reason ?? '', ...(ruleType ? { ruleType } : {}) };
     plans.push({
       line,
       action: existingId ? 'update' : 'create',
       apply: async (tx) => {
         if (existingId) await tx.colorCompatibilityRule.update({ where: { id: existingId }, data });
-        else await tx.colorCompatibilityRule.create({ data: { colorAId: a!, colorBId: b!, ...data } });
+        else await tx.colorCompatibilityRule.create({ data: { colorAId: a!, colorBId: b!, ruleType: 'curated', ...data } });
       },
     });
   }

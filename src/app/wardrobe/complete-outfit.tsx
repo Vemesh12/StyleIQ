@@ -136,7 +136,11 @@ export function CompleteOutfit({
               <div key={i} className="p-4 rounded-xl bg-slate-50 dark:bg-zinc-800/50 border border-slate-200 dark:border-zinc-800 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-bold text-slate-500 dark:text-zinc-400">{i === 0 ? 'Best match' : `Option ${i + 1}`}</span>
-                  <Badge variant={o.score >= 85 ? 'excellent' : o.score >= 70 ? 'good' : 'acceptable'}>{o.score}% match</Badge>
+                  {o.scorable === false ? (
+                    <Badge variant="outline">Not enough to score</Badge>
+                  ) : (
+                    <Badge variant={o.score >= 85 ? 'excellent' : o.score >= 70 ? 'good' : 'acceptable'}>{o.score}% match</Badge>
+                  )}
                 </div>
                 <OutfitPieces pieces={piecesOf(o)} />
                 {o.highlights?.[0] && <p className="text-xs text-emerald-700 dark:text-emerald-400">{o.highlights[0]}</p>}

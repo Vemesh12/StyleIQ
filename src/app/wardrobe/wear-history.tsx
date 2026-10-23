@@ -24,6 +24,8 @@ const formatDay = (iso: string) =>
 export function WearHistory({ isLoggedIn, allGarments }: { isLoggedIn: boolean; allGarments: AllGarment[] }) {
   const [entries, setEntries] = useState<Entry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [removeError, setRemoveError] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -55,8 +57,17 @@ export function WearHistory({ isLoggedIn, allGarments }: { isLoggedIn: boolean; 
   }, [isLoggedIn, allGarments]);
 
   const remove = async (id: string) => {
-    const res = await fetch(`/api/user/wear-log?id=${id}`, { method: 'DELETE' });
-    if (res.ok || res.status === 404) setEntries((prev) => prev?.filter((e) => e.id !== id) ?? null);
+    setRemoveError(null);
+    setRemovingId(id);
+    try {
+      const res = await fetch(`/api/user/wear-log?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (res.ok || res.status === 404) setEntries((prev) => prev?.filter((e) => e.id !== id) ?? null);
+      else setRemoveError('Could not remove that day — please try again.');
+    } catch {
+      setRemoveError('Could not remove that day — check your connection and try again.');
+    } finally {
+      setRemovingId(null);
+    }
   };
 
   if (error) return <p className="text-sm text-rose-600 dark:text-rose-400">{error}</p>;
@@ -76,27 +87,34 @@ export function WearHistory({ isLoggedIn, allGarments }: { isLoggedIn: boolean; 
   }
 
   return (
-    <ol className="space-y-4">
-      {entries.map((e) => (
-        <li key={e.id}>
-          <Card className="p-4 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <CalendarDays className="w-4 h-4 text-amber-600" /> {formatDay(e.wornOn)}
-              </h3>
-              <div className="flex items-center gap-2">
-                {e.outfitScore != null && <span className="text-xs text-slate-500 dark:text-zinc-400">{e.outfitScore}% match</span>}
-                {isLoggedIn && (
-                  <button onClick={() => remove(e.id)} aria-label={`Remove ${formatDay(e.wornOn)} from history`} className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
+    <>
+      {removeError && (
+        <p role="alert" className="mb-4 text-sm font-medium text-rose-600 dark:text-rose-400">
+          {removeError}
+        </p>
+      )}
+      <ol className="space-y-4">
+        {entries.map((e) => (
+          <li key={e.id}>
+            <Card className="p-4 bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <CalendarDays className="w-4 h-4 text-amber-600" /> {formatDay(e.wornOn)}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {e.outfitScore != null && <span className="text-xs text-slate-500 dark:text-zinc-400">{e.outfitScore}% match</span>}
+                  {isLoggedIn && (
+                    <button type="button" onClick={() => remove(e.id)} disabled={removingId === e.id} aria-label={`Remove ${formatDay(e.wornOn)} from history`} className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-            <OutfitPieces pieces={e.items} size={32} />
-          </Card>
-        </li>
-      ))}
-    </ol>
+              <OutfitPieces pieces={e.items} size={32} />
+            </Card>
+          </li>
+        ))}
+      </ol>
+    </>
   );
 }

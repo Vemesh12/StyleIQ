@@ -81,19 +81,22 @@ const PRESET_SWATCHES = [
 
 const DEFAULT_HEX = '#1B2A4A';
 
-async function fetchColorMatch(hex: string): Promise<MatchResponse | null> {
-  try {
-    const res = await fetch('/api/colors/match', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ hex }),
-    });
-    return res.ok ? await res.json() : null;
-  } catch (err) {
-    console.error('Failed to match color:', err);
-    return null;
+// Throws on failure (including abort), so callers can show an error.
+async function fetchColorMatch(hex: string, signal?: AbortSignal): Promise<MatchResponse> {
+  const res = await fetch('/api/colors/match', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hex }),
+    signal,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Could not analyze this color — please try again.');
   }
+  return res.json();
 }
+
+const isAbort = (err: unknown) => err instanceof DOMException && err.name === 'AbortError';
 
 export function ImageColorPicker() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
@@ -103,31 +106,69 @@ export function ImageColorPicker() {
   const [analyzing, setAnalyzing] = useState<boolean>(true);
   const [matchData, setMatchData] = useState<MatchResponse | null>(null);
   const [dominantColors, setDominantColors] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const previewImgRef = useRef<HTMLImageElement>(null);
+  // The live camera stream, kept outside the <video> so it can always be stopped.
+  const streamRef = useRef<MediaStream | null>(null);
+  // Bumped on every start/stop, so a getUserMedia that resolves after the
+  // camera was closed (or the page left) stops its stream instead of leaking it.
+  const cameraSessionRef = useRef(0);
+  // Only the latest color analysis may update the results.
+  const matchAbortRef = useRef<AbortController | null>(null);
 
-  // Trigger analysis for a given hex
+  // Trigger analysis for a given hex; a newer one cancels the older request.
   const analyzeColor = useCallback(async (hex: string) => {
+    matchAbortRef.current?.abort();
+    const controller = new AbortController();
+    matchAbortRef.current = controller;
     setSelectedHex(hex);
     setAnalyzing(true);
-    const data = await fetchColorMatch(hex);
-    if (data) setMatchData(data);
-    setAnalyzing(false);
+    setError(null);
+    try {
+      const data = await fetchColorMatch(hex, controller.signal);
+      if (controller.signal.aborted) return;
+      setMatchData(data);
+    } catch (err) {
+      if (isAbort(err) || controller.signal.aborted) return;
+      console.error('Failed to match color:', err);
+      setError(err instanceof Error && err.message ? err.message : 'Could not analyze this color — please try again.');
+    }
+    if (matchAbortRef.current === controller) setAnalyzing(false);
   }, []);
 
   // Initial analysis of the default swatch on mount
   useEffect(() => {
-    let active = true;
-    fetchColorMatch(DEFAULT_HEX).then((data) => {
-      if (!active) return;
-      if (data) setMatchData(data);
-      setAnalyzing(false);
-    });
+    const controller = new AbortController();
+    matchAbortRef.current = controller;
+    fetchColorMatch(DEFAULT_HEX, controller.signal)
+      .then((data) => {
+        if (!controller.signal.aborted) setMatchData(data);
+      })
+      .catch((err) => {
+        if (isAbort(err) || controller.signal.aborted) return;
+        console.error('Failed to match color:', err);
+        setError('Could not load color pairings — check your connection and try again.');
+      })
+      .finally(() => {
+        if (matchAbortRef.current === controller) setAnalyzing(false);
+      });
+    return () => controller.abort();
+  }, []);
+
+  // Leaving the page: stop the camera and any in-flight analysis.
+  useEffect(() => {
+    const session = cameraSessionRef;
+    const abortRef = matchAbortRef;
+    const stream = streamRef;
     return () => {
-      active = false;
+      session.current++;
+      stream.current?.getTracks().forEach((track) => track.stop());
+      stream.current = null;
+      abortRef.current?.abort();
     };
   }, []);
 
@@ -148,30 +189,41 @@ export function ImageColorPicker() {
 
   // Start live webcam stream
   const startCamera = async () => {
+    const session = ++cameraSessionRef.current;
     setImageSrc(null);
+    setError(null);
     setIsCameraActive(true);
     try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API unavailable');
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 480 } },
       });
+      if (session !== cameraSessionRef.current) {
+        // Closed (or unmounted) while the permission prompt was open.
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        await videoRef.current.play().catch(() => {
+          // autoPlay will start it; play() can reject if interrupted.
+        });
       }
     } catch (err) {
+      if (session !== cameraSessionRef.current) return;
       console.error('Camera access error:', err);
       setIsCameraActive(false);
-      alert('Camera access was denied or is unavailable on this device.');
+      setError('Camera access was denied or is unavailable on this device. You can upload a photo instead.');
     }
   };
 
   // Stop webcam
   const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
-    }
+    cameraSessionRef.current++;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (videoRef.current) videoRef.current.srcObject = null;
     setIsCameraActive(false);
   };
 
@@ -214,11 +266,15 @@ export function ImageColorPicker() {
         if (sorted.length > 0) {
           setDominantColors(sorted);
           analyzeColor(sorted[0]);
+        } else {
+          setError('Could not find any colors in this image — try another photo.');
         }
       } catch (e) {
         console.error('Canvas reading error:', e);
+        setError('Could not read this image — try another photo.');
       }
     };
+    img.onerror = () => setError('Could not open this image — try a JPEG or PNG photo.');
     img.src = src;
   };
 
@@ -320,6 +376,12 @@ export function ImageColorPicker() {
       <CardContent className="p-6 space-y-8">
         {/* Hidden Canvas for computation */}
         <canvas ref={canvasRef} className="hidden" />
+
+        {error && (
+          <p role="alert" className="text-sm font-medium text-rose-700 dark:text-rose-300 bg-rose-50 dark:bg-rose-500/10 border border-rose-200 dark:border-rose-500/20 rounded-xl px-4 py-3">
+            {error}
+          </p>
+        )}
 
         {/* Input & Scanner Viewport */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">

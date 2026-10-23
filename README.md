@@ -161,6 +161,31 @@ write fails loudly instead of corrupting scoring.
 - Users' own items are private: excluded from the catalog, encyclopedia,
   sitemap, admin lists and `db:export`.
 
+## Deploying
+
+1. Set the environment variables from step 2 on the host. In production
+   `JWT_SECRET` must be 32+ characters and `ADMIN_PASSWORD` 12+ characters.
+   `NEXT_PUBLIC_APP_URL` should be the real `https://` URL and must be set
+   **before** `npm run build` (Next.js bakes `NEXT_PUBLIC_*` values into the build). Serve over HTTPS —
+   session cookies are `Secure` in production.
+2. `npm ci`, then `npm run db:migrate` (`npm run db:setup` on an empty
+   database). The seed uses `tsx`, which is a production dependency.
+3. `npm run build` — the build pre-renders catalog pages, so it **needs a
+   reachable database**. Then `npm start`.
+4. Sign in to `/admin` and change the admin password if the seed generated one.
+
+Things to know:
+
+- **Re-running the seed overwrites the catalog** with `prisma/data/`. Run
+  `npm run db:export` and commit first if admins edited the catalog in production.
+- **More than one server instance:** set the Upstash variables so rate limits
+  are shared. Catalog caches are per process and refresh within a few minutes
+  of an admin edit on other instances.
+- **Serverless / many connections:** use a pooled `DATABASE_URL` (e.g. PgBouncer,
+  Neon/Supabase pooler with `?pgbouncer=true&connection_limit=1`).
+- Set `TRUSTED_PROXY_HOPS` to the number of proxies in front of the app, or
+  rate limiting will key on the proxy's IP.
+
 ## Notes
 
 - Personalization advice depends on one input each: clothing colors and metals

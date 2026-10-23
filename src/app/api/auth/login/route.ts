@@ -1,40 +1,40 @@
-import { prisma } from '@/lib/prisma';
-import { createUserToken, USER_COOKIE_NAME } from '@/lib/auth';
+import { createUserToken, findUserByEmail, USER_COOKIE_NAME } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyPassword } from '@/lib/password';
 import { loginSchema } from '@/lib/validation';
-import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
+import { enforceLoginRateLimits, getClientIp, recordLoginFailure, type LoginLimits } from '@/lib/rate-limit';
+
+const LOGIN_LIMITS: LoginLimits = {
+  scope: 'login',
+  ipAccountLimit: 5,
+  ipLimit: 30,
+  accountFailureLimit: 15,
+  windowMs: 15 * 60 * 1000,
+};
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json().catch(() => null);
     const parsed = loginSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const { email, password } = parsed.data;
 
+    // Per IP+account (normal typo protection), per IP across all accounts
+    // (one IP spraying many accounts), and failed attempts per account across
+    // all IPs (distributed guessing) — which a clean IP bypasses, so attackers
+    // can't lock the real owner out.
     const ip = getClientIp(request);
-    const account = email.toLowerCase();
-    const WINDOW = 15 * 60 * 1000;
-    // Per IP+account (normal typo protection), per account across all IPs
-    // (distributed guessing of one password), and per IP across all accounts
-    // (one IP spraying many accounts).
-    const limited = await enforceRateLimits(
-      [
-        { key: `login:ip-acct:${ip}:${account}`, limit: 5, windowMs: WINDOW },
-        { key: `login:acct:${account}`, limit: 15, windowMs: WINDOW },
-        { key: `login:ip:${ip}`, limit: 30, windowMs: WINDOW },
-      ],
-      'Too many login attempts. Please try again later.'
-    );
+    const limited = await enforceLoginRateLimits(LOGIN_LIMITS, ip, email);
     if (limited) return limited;
 
-    const user = await prisma.user.findUnique({ where: { email } });
+    const user = await findUserByEmail(email);
     // Always runs a bcrypt comparison (against a dummy hash when the account
     // doesn't exist) so timing doesn't reveal which emails are registered.
     const valid = await verifyPassword(password, user?.password);
     if (!user || !valid) {
+      await recordLoginFailure(LOGIN_LIMITS, ip, email);
       return NextResponse.json({ error: 'Invalid email or password' }, { status: 401 });
     }
 

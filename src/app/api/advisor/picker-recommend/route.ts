@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
     ]);
     if (limited) return limited;
 
-    const parsed = pickerRecommendSchema.safeParse(await request.json());
+    const parsed = pickerRecommendSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message || 'Invalid request.' }, { status: 400 });
     }

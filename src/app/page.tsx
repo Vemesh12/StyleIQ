@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { StarRating } from '@/components/star-rating';
+import { compatibilityTypeForRating } from '@/lib/rule-engine/rating';
 import {
   Shirt,
   Sparkles,
@@ -191,7 +192,7 @@ export default async function HomePage() {
             {featuredRules.map((rule) => (
               <Card key={rule.id} className="bg-slate-50 dark:bg-zinc-800/60 border-slate-200 dark:border-zinc-700 p-6 space-y-4">
                 <div className="flex items-center justify-between">
-                  <Badge variant="excellent">5.0 Star Rating</Badge>
+                  <Badge variant={compatibilityTypeForRating(rule.rating)}>{rule.rating.toFixed(1)} Star Rating</Badge>
                   <StarRating rating={rule.rating} size="sm" />
                 </div>
 

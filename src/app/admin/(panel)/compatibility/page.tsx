@@ -30,7 +30,8 @@ export default function AdminCompatibilityPage() {
   const [form, setForm] = useState({
     garmentAId: '',
     garmentBId: '',
-    rating: 4.5,
+    // Middle of the scale: the admin raises or lowers it deliberately.
+    rating: 3,
     reason: '',
   });
   const [error, setError] = useState<string | null>(null);
@@ -85,7 +86,7 @@ export default function AdminCompatibilityPage() {
       });
       if (res.ok) {
         setShowForm(false);
-        setForm({ garmentAId: '', garmentBId: '', rating: 4.5, reason: '' });
+        setForm({ garmentAId: '', garmentBId: '', rating: 3, reason: '' });
         fetchData();
       } else {
         const data = await res.json().catch(() => ({}));
@@ -204,7 +205,7 @@ export default function AdminCompatibilityPage() {
                     <span className="font-semibold text-zinc-100">{rule.garmentA.name}</span>
                     <span className="text-zinc-500">+</span>
                     <span className="font-semibold text-zinc-100">{rule.garmentB.name}</span>
-                    <Badge variant={rule.compatibilityType as 'excellent' | 'good' | 'acceptable' | 'avoid'}>
+                    <Badge variant={compatibilityTypeForRating(rule.rating)}>
                       {rule.compatibilityType}
                     </Badge>
                   </div>

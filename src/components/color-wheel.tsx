@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Compass, CheckCircle2 } from 'lucide-react';
+import { hslHueFromRyb, rybHue } from '@/lib/rule-engine/color-rules';
 
 // Convert HSL to Hex
 function hslToHex(h: number, s: number, l: number): string {
@@ -26,20 +27,24 @@ export function ColorWheel() {
 
   const primaryHex = hslToHex(hue, saturation, lightness);
 
-  // Harmony angles
-  const compHue = (hue + 180) % 360;
+  // Harmonies are measured on the painter's (RYB) wheel — the same wheel the
+  // outfit scorer uses — so the complement of blue is orange, not yellow.
+  const ryb = rybHue(hue);
+  const at = (offset: number) => Math.round(hslHueFromRyb(ryb + offset)) % 360;
+
+  const compHue = at(180);
   const compHex = hslToHex(compHue, saturation, lightness);
 
-  const analHue1 = (hue + 30) % 360;
+  const analHue1 = at(30);
   const analHex1 = hslToHex(analHue1, saturation, lightness);
 
-  const analHue2 = (hue + 330) % 360;
+  const analHue2 = at(-30);
   const analHex2 = hslToHex(analHue2, saturation, lightness);
 
-  const triadHue1 = (hue + 120) % 360;
+  const triadHue1 = at(120);
   const triadHex1 = hslToHex(triadHue1, saturation, lightness);
 
-  const triadHue2 = (hue + 240) % 360;
+  const triadHue2 = at(240);
   const triadHex2 = hslToHex(triadHue2, saturation, lightness);
 
   return (

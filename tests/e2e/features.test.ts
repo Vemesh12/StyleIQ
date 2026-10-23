@@ -153,7 +153,12 @@ describe('what should I buy next', () => {
 describe('admin: color rules', () => {
   it('creates a rule, updates it from the reverse direction, and deletes it', async () => {
     const admin = await adminClient();
-    const [a, b] = await prisma.color.findMany({ where: { slug: { in: ['lilac', 'olive-green'] } }, orderBy: { slug: 'asc' } });
+    // A pair with no curated rule yet, so the test never overwrites (then deletes) real catalog data.
+    const colors = await prisma.color.findMany({ orderBy: { slug: 'asc' }, take: 40 });
+    const ruled = new Set(
+      (await prisma.colorCompatibilityRule.findMany({ select: { colorAId: true, colorBId: true } })).flatMap((r) => [`${r.colorAId}|${r.colorBId}`, `${r.colorBId}|${r.colorAId}`])
+    );
+    const [a, b] = colors.flatMap((x, i) => colors.slice(i + 1).map((y) => [x, y])).find(([x, y]) => !ruled.has(`${x.id}|${y.id}`))!;
     const created = await admin.post('/api/admin/color-rules', { colorA: a.slug, colorB: b.slug, score: 4, harmony: 'Clash', reason: `${TAG}` });
     expect(created.status).toBe(201);
     const updated = await admin.post('/api/admin/color-rules', { colorA: b.slug, colorB: a.slug, score: 7.5, harmony: 'Muted Mismatch', reason: `${TAG}` });

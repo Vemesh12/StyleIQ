@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { fabricClash, scoreOutfit } from '../core';
 import { findWardrobeGaps } from '../gaps';
 import { findBestOutfits } from '../outfit-finder';
+import { serializeOutfitPick } from '../serialize';
 import { emptySignals, outfitKey, rankAdjustFor } from '../signals';
 import { C, garment, noRules, occasions, sampleCatalog } from './fixtures';
 
@@ -108,5 +109,93 @@ describe('wardrobe gaps', () => {
     expect(suggestions[0].garment.slot).toBe('footwear');
     expect(suggestions[0].newOutfits).toBeGreaterThan(0);
     expect(suggestions.every((s) => !owned.some((o) => o.id === s.garment.id))).toBe(true);
+  });
+});
+
+describe('finder accessories', () => {
+  it('keeps every locked accessory in every result', () => {
+    const watch = garment('watch', [C.black], { id: 'black-watch', name: 'Black Watch' });
+    const picks = findBestOutfits({
+      garments: [...sampleCatalog(), watch],
+      ctx: {},
+      lookups: noRules,
+      topN: 3,
+      requiredIds: ['navy-tie', 'black-watch', 'brown-belt'],
+    });
+    expect(picks.length).toBeGreaterThan(0);
+    for (const p of picks) {
+      expect(p.belt?.id).toBe('brown-belt');
+      expect(p.accessories?.map((g) => g.id).sort()).toEqual(['black-watch', 'navy-tie']);
+      expect(p.score.totalScore).toBe(scoreOutfit([p.top, p.layer, p.bottom, p.shoe, p.belt, ...p.accessories!].filter((g) => !!g), {}, noRules).totalScore);
+    }
+  });
+
+  it('serializes locked accessories, ownership and scorability', () => {
+    const own = garment('shirt', [C.white], { id: 'my-shirt', isOwn: true });
+    const [p] = findBestOutfits({ garments: [...sampleCatalog(), own], ctx: {}, lookups: noRules, topN: 1, requiredIds: ['my-shirt', 'navy-tie'] });
+    const out = serializeOutfitPick(p);
+    expect(out.shirt.isOwn).toBe(true);
+    expect(out.trouser.isOwn).toBe(false);
+    expect(out.accessories.map((a) => a.id)).toEqual(['navy-tie']);
+    expect(out.scorable).toBe(true);
+  });
+
+  it('leaves the belt off when every belt clashes with the shoes', () => {
+    const garments = [
+      byId('white-dress-shirt'),
+      byId('charcoal-trousers'),
+      byId('black-oxfords'),
+      byId('brown-belt'),
+    ];
+    const [p] = findBestOutfits({ garments, ctx: { occasion: occasions.businessFormal }, lookups: noRules, topN: 1 });
+    expect(p.belt).toBeUndefined();
+  });
+
+  it('still wears a clashing belt when it is locked', () => {
+    const garments = [byId('white-dress-shirt'), byId('charcoal-trousers'), byId('black-oxfords'), byId('brown-belt')];
+    const [p] = findBestOutfits({ garments, ctx: {}, lookups: noRules, topN: 1, requiredIds: ['brown-belt'] });
+    expect(p.belt?.id).toBe('brown-belt');
+  });
+});
+
+describe('beam search with re-ranking', () => {
+  it('can surface outfits that the plain-score beam would have pruned', () => {
+    // 70 trousers => 70 star-shirt pairs, all outscoring the plain tee, so a
+    // beam pruned on the plain score holds nothing but the star shirt.
+    const star = garment('shirt', [C.white], { id: 'star-shirt', formality: 3 });
+    const tee = garment('tshirt', [C.red], { id: 'red-tee', formality: 1 });
+    const trousers = Array.from({ length: 70 }, (_, i) => garment('trouser', [i % 2 ? C.navy : C.charcoal], { id: `t${i}`, formality: 3 }));
+    const shoe = garment('shoe', [C.darkBrown], { formality: 3 });
+    const avoidStar = (pieces: { id: string }[]) => (pieces.some((g) => g.id === 'star-shirt') ? -100 : 0);
+
+    const plain = findBestOutfits({ garments: [star, tee, ...trousers, shoe], ctx: {}, lookups: noRules, topN: 1 });
+    expect(plain[0].top.id).toBe('star-shirt');
+    const [p] = findBestOutfits({ garments: [star, tee, ...trousers, shoe], ctx: {}, lookups: noRules, topN: 1, rankAdjust: avoidStar });
+    expect(p.top.id).toBe('red-tee');
+    expect(p.score.totalScore).toBe(scoreOutfit([p.top, p.bottom, p.shoe], {}, noRules).totalScore);
+  });
+});
+
+describe('wardrobe gaps counting', () => {
+  it('counts outfits whose pairs are not all good on their own', () => {
+    // The shoes alone are a weak match for the top, but the full outfit works:
+    // it used to be skipped because only good shoe+top pairs were tried.
+    const owned = [garment('shirt', [C.navy], { id: 'T', formality: 3 }), garment('trouser', [C.white], { id: 'B', formality: 3 })];
+    const shoe = garment('shoe', [C.darkBrown], { id: 'S', formality: 5 });
+    expect(scoreOutfit([shoe, owned[0]], {}, noRules).totalScore).toBeLessThan(75);
+    expect(scoreOutfit([shoe, ...owned], {}, noRules).totalScore).toBeGreaterThanOrEqual(75);
+    const { suggestions } = findWardrobeGaps({ owned, candidates: [shoe], ctx: {}, lookups: noRules });
+    expect(suggestions[0]?.newOutfits).toBe(1);
+  });
+
+  it('stays bounded for a 500-piece closet', () => {
+    const palette = [C.white, C.navy, C.charcoal, C.beige, C.skyBlue, C.olive, C.black, C.darkBrown];
+    const owned = Array.from({ length: 500 }, (_, i) =>
+      garment(['shirt', 'trouser', 'shoe'][i % 3], [palette[i % palette.length]], { id: `own-${i}`, formality: 2 + (i % 3) })
+    );
+    const started = Date.now();
+    const { suggestions } = findWardrobeGaps({ owned, candidates: sampleCatalog(), ctx: {}, lookups: noRules });
+    expect(suggestions.length).toBeGreaterThan(0);
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 });

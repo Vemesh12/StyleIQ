@@ -55,38 +55,51 @@ function memoryHit(key: string, limit: number, windowMs: number): RateLimitResul
   return { allowed: true, retryAfterSeconds: 0 };
 }
 
+/** Current state of a bucket without counting a hit. */
+function memoryPeek(key: string, limit: number): RateLimitResult {
+  const now = Date.now();
+  const bucket = buckets.get(key);
+  if (!bucket || bucket.resetAt <= now || bucket.count < limit) return { allowed: true, retryAfterSeconds: 0 };
+  return { allowed: false, retryAfterSeconds: Math.ceil((bucket.resetAt - now) / 1000) };
+}
+
+/** Counts a hit unconditionally (no limit), starting the window if needed. */
+function memoryRecord(key: string, windowMs: number) {
+  const now = Date.now();
+  cleanupExpiredBuckets(now);
+  const bucket = buckets.get(key);
+  if (!bucket || bucket.resetAt <= now) buckets.set(key, { count: 1, resetAt: now + windowMs });
+  else bucket.count += 1;
+}
+
 // ---------------------------------------------------------------------------
 // Upstash Redis backend
 // ---------------------------------------------------------------------------
 
 let redisWarned = false;
 
-async function redisHit(key: string, limit: number, windowMs: number): Promise<RateLimitResult | null> {
+type RedisReply = { result?: number | string | null; error?: string };
+
+/** Runs commands in one Upstash pipeline; null when Redis isn't configured or fails. */
+async function redisPipeline(commands: string[][]): Promise<RedisReply[] | null> {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) return null;
 
   try {
-    const redisKey = `styleiq:rl:${key}`;
     const res = await fetch(`${url.replace(/\/$/, '')}/pipeline`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      // INCR, start the window on first hit only (NX), then read the remaining TTL.
-      body: JSON.stringify([
-        ['INCR', redisKey],
-        ['PEXPIRE', redisKey, String(windowMs), 'NX'],
-        ['PTTL', redisKey],
-      ]),
+      body: JSON.stringify(commands),
       cache: 'no-store',
       signal: AbortSignal.timeout(1500),
     });
     if (!res.ok) throw new Error(`Upstash responded ${res.status}`);
-    const [incr, , pttl] = (await res.json()) as { result?: number; error?: string }[];
-    if (typeof incr?.result !== 'number') throw new Error(incr?.error || 'Unexpected Upstash response');
-    const ttlMs = typeof pttl?.result === 'number' && pttl.result > 0 ? pttl.result : windowMs;
-    return incr.result <= limit
-      ? { allowed: true, retryAfterSeconds: 0 }
-      : { allowed: false, retryAfterSeconds: Math.ceil(ttlMs / 1000) };
+    const replies = (await res.json()) as RedisReply[];
+    if (!Array.isArray(replies)) throw new Error('Unexpected Upstash response');
+    const failed = replies.find((r) => r?.error);
+    if (failed) throw new Error(failed.error);
+    return replies;
   } catch (error) {
     if (!redisWarned) {
       redisWarned = true;
@@ -94,6 +107,50 @@ async function redisHit(key: string, limit: number, windowMs: number): Promise<R
     }
     return null;
   }
+}
+
+const redisKey = (key: string) => `styleiq:rl:${key}`;
+const ttlFrom = (reply: RedisReply | undefined, windowMs: number) =>
+  typeof reply?.result === 'number' && reply.result > 0 ? reply.result : windowMs;
+
+async function redisHit(key: string, limit: number, windowMs: number): Promise<RateLimitResult | null> {
+  const k = redisKey(key);
+  // INCR, start the window on first hit only (NX), then read the remaining TTL.
+  const replies = await redisPipeline([
+    ['INCR', k],
+    ['PEXPIRE', k, String(windowMs), 'NX'],
+    ['PTTL', k],
+  ]);
+  if (!replies) return null;
+  const [incr, , pttl] = replies;
+  if (typeof incr?.result !== 'number') return null;
+  return incr.result <= limit
+    ? { allowed: true, retryAfterSeconds: 0 }
+    : { allowed: false, retryAfterSeconds: Math.ceil(ttlFrom(pttl, windowMs) / 1000) };
+}
+
+async function redisPeek(key: string, limit: number, windowMs: number): Promise<RateLimitResult | null> {
+  const k = redisKey(key);
+  const replies = await redisPipeline([
+    ['GET', k],
+    ['PTTL', k],
+  ]);
+  if (!replies) return null;
+  const [get, pttl] = replies;
+  const count = get?.result == null ? 0 : Number(get.result);
+  if (!Number.isFinite(count)) return null;
+  return count < limit
+    ? { allowed: true, retryAfterSeconds: 0 }
+    : { allowed: false, retryAfterSeconds: Math.ceil(ttlFrom(pttl, windowMs) / 1000) };
+}
+
+async function redisRecord(key: string, windowMs: number): Promise<boolean> {
+  const k = redisKey(key);
+  const replies = await redisPipeline([
+    ['INCR', k],
+    ['PEXPIRE', k, String(windowMs), 'NX'],
+  ]);
+  return replies !== null;
 }
 
 // ---------------------------------------------------------------------------
@@ -105,6 +162,23 @@ export async function checkRateLimit(key: string, limit = 5, windowMs = 15 * 60 
 }
 
 /**
+ * Reads a bucket WITHOUT counting this request: not allowed once `limit`
+ * hits were recorded in the current window. Pair with recordRateLimitHit for
+ * buckets that only count some outcomes (e.g. failed logins).
+ */
+export async function peekRateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult> {
+  return (await redisPeek(key, limit, windowMs)) ?? memoryPeek(key, limit);
+}
+
+/** Counts one hit against a bucket (no limit check). */
+export async function recordRateLimitHit(key: string, windowMs: number): Promise<void> {
+  if (!(await redisRecord(key, windowMs))) memoryRecord(key, windowMs);
+}
+
+const tooMany = (message: string, retryAfterSeconds: number) =>
+  NextResponse.json({ error: message }, { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } });
+
+/**
  * Checks several buckets at once (e.g. per-IP, per-account, per-IP+account)
  * and returns a ready 429 response if any of them is exhausted, else null.
  */
@@ -114,14 +188,62 @@ export async function enforceRateLimits(
 ): Promise<NextResponse | null> {
   for (const { key, limit, windowMs } of checks) {
     const { allowed, retryAfterSeconds } = await checkRateLimit(key, limit, windowMs);
-    if (!allowed) {
-      return NextResponse.json(
-        { error: message },
-        { status: 429, headers: { 'Retry-After': String(retryAfterSeconds) } }
-      );
-    }
+    if (!allowed) return tooMany(message, retryAfterSeconds);
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Login limits
+// ---------------------------------------------------------------------------
+
+export interface LoginLimits {
+  /** Key prefix, e.g. 'login' or 'admin-login'. */
+  scope: string;
+  /** Every attempt from one IP, across all accounts (spraying). */
+  ipLimit: number;
+  /** Every attempt from one IP against one account (typos, single-source guessing). */
+  ipAccountLimit: number;
+  /** FAILED attempts against one account from anywhere (distributed guessing). */
+  accountFailureLimit: number;
+  windowMs: number;
+}
+
+/**
+ * Rate limits for a login attempt. The per-account bucket counts only
+ * failures, and an IP with no recent failures bypasses it, so an attacker
+ * hammering an account (e.g. the admin's) can't lock its owner out: the
+ * owner's clean IP still gets through, while every IP that has been failing
+ * stays blocked from that account until the window passes.
+ */
+export async function enforceLoginRateLimits(
+  limits: LoginLimits,
+  ip: string,
+  account: string,
+  message = 'Too many login attempts. Please try again later.'
+): Promise<NextResponse | null> {
+  const { scope, windowMs } = limits;
+  const counted = await enforceRateLimits(
+    [
+      { key: `${scope}:ip-acct:${ip}:${account}`, limit: limits.ipAccountLimit, windowMs },
+      { key: `${scope}:ip:${ip}`, limit: limits.ipLimit, windowMs },
+    ],
+    message
+  );
+  if (counted) return counted;
+
+  const accountFailures = await peekRateLimit(`${scope}:acct-fail:${account}`, limits.accountFailureLimit, windowMs);
+  if (accountFailures.allowed) return null;
+  const ipIsClean = (await peekRateLimit(`${scope}:ip-fail:${ip}`, 1, windowMs)).allowed;
+  return ipIsClean ? null : tooMany(message, accountFailures.retryAfterSeconds);
+}
+
+/** Call after a failed login so the failure-only buckets see it. */
+export async function recordLoginFailure(limits: LoginLimits, ip: string, account: string): Promise<void> {
+  await Promise.all([
+    recordRateLimitHit(`${limits.scope}:acct-fail:${account}`, limits.windowMs),
+    recordRateLimitHit(`${limits.scope}:ip-fail:${ip}`, limits.windowMs),
+  ]);
 }
 
 /**

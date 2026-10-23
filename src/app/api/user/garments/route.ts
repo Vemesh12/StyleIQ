@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { getUserSession } from '@/lib/auth';
-import { customGarmentSchema } from '@/lib/validation';
+import { customGarmentSchema, MAX_WARDROBE_ITEMS } from '@/lib/validation';
 import { slugify } from '@/lib/utils';
 import { occasionSuitability, seasonSuitability } from '@/lib/rule-engine/suitability';
 
@@ -39,6 +39,10 @@ export async function POST(request: NextRequest) {
 
   if ((await prisma.garment.count({ where: { ownerId: user.id } })) >= MAX_OWN_GARMENTS) {
     return NextResponse.json({ error: `You can add up to ${MAX_OWN_GARMENTS} of your own items.` }, { status: 400 });
+  }
+  // The new item also goes into the closet, which has its own cap.
+  if ((await prisma.digitalWardrobe.count({ where: { userId: user.id } })) >= MAX_WARDROBE_ITEMS) {
+    return NextResponse.json({ error: `Your closet can hold up to ${MAX_WARDROBE_ITEMS} items.` }, { status: 400 });
   }
 
   const [type, colors, pattern, material, fit, occasions, seasons] = await Promise.all([

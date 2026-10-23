@@ -60,9 +60,16 @@ export default function AdminImportPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ kind, csv, dryRun }),
       });
-      const data = await res.json();
-      if (res.status === 400 || res.status >= 500) setError(data.error || 'Import failed.');
-      else setReport(data);
+      const data = await res.json().catch(() => null);
+      // 200 = imported/validated, 422 = a report listing row errors. Anything
+      // else (401 expired session, 400, 413, 429, 500) is an error, not a report.
+      if (res.status === 401 || res.status === 403) {
+        setError('Your admin session has expired. Sign in again at /admin/login, then retry.');
+      } else if ((res.ok || res.status === 422) && typeof data?.rows === 'number') {
+        setReport(data as Report);
+      } else {
+        setError((data && typeof data.error === 'string' && data.error) || `Import failed (${res.status}).`);
+      }
     } catch {
       setError('Import failed — check your connection.');
     }

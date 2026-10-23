@@ -48,12 +48,18 @@ export function CustomGarmentForm({ onCreated }: { onCreated: () => void }) {
 
   const openForm = async () => {
     setOpen(true);
+    setError(null);
     if (options) return;
+    const getJson = (url: string) =>
+      fetch(url).then((r) => {
+        if (!r.ok) throw new Error(`${url} failed (${r.status})`);
+        return r.json();
+      });
     try {
       const [types, colors, attrs] = await Promise.all([
-        fetch('/api/garments?listTypes=true').then((r) => r.json()),
-        fetch('/api/colors').then((r) => r.json()),
-        fetch('/api/garments?listAttributes=true').then((r) => r.json()),
+        getJson('/api/garments?listTypes=true'),
+        getJson('/api/colors'),
+        getJson('/api/garments?listAttributes=true'),
       ]);
       setOptions({ types, colors: colors.colors, fits: attrs.fits, materials: attrs.materials, patterns: attrs.patterns });
       setForm((f) => ({ ...f, typeSlug: f.typeSlug || types[0]?.slug || '' }));
@@ -82,7 +88,7 @@ export function CustomGarmentForm({ onCreated }: { onCreated: () => void }) {
           fitSlug: form.fitSlug || undefined,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) setError(data.error || 'Could not add the item.');
       else {
         setForm({ ...EMPTY, typeSlug: form.typeSlug });
@@ -123,7 +129,13 @@ export function CustomGarmentForm({ onCreated }: { onCreated: () => void }) {
 
           {error && <p role="alert" className="text-sm text-rose-600 dark:text-rose-400">{error}</p>}
           {!options ? (
-            <p className="text-sm text-slate-500 dark:text-zinc-400">Loading options...</p>
+            error ? (
+              <Button type="button" variant="outline" size="sm" onClick={openForm}>
+                Try again
+              </Button>
+            ) : (
+              <p className="text-sm text-slate-500 dark:text-zinc-400">Loading options...</p>
+            )
           ) : (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

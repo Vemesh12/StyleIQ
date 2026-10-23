@@ -12,7 +12,7 @@ import { randomBytes } from 'crypto';
 const prisma = new PrismaClient();
 
 async function main() {
-  const email = process.env.ADMIN_EMAIL || 'admin@styleiq.com';
+  const email = (process.env.ADMIN_EMAIL || 'admin@styleiq.com').trim().toLowerCase();
   const provided = process.env.ADMIN_PASSWORD;
   if (provided && provided.length < 12) {
     throw new Error('ADMIN_PASSWORD must be at least 12 characters.');

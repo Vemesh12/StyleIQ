@@ -1,9 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { getUserSession } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
-import { wardrobeAddSchema } from '@/lib/validation';
-
-const MAX_WARDROBE_ITEMS = 500;
+import { wardrobeAddSchema, MAX_WARDROBE_ITEMS } from '@/lib/validation';
 
 // GET user's digital wardrobe items
 export async function GET() {
@@ -41,7 +39,7 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const parsed = wardrobeAddSchema.safeParse(await request.json());
+    const parsed = wardrobeAddSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
@@ -57,8 +55,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Garment not found' }, { status: 404 });
     }
 
-    const owned = await prisma.digitalWardrobe.count({ where: { userId: user.id } });
-    if (owned + validIds.length > MAX_WARDROBE_ITEMS) {
+    // Only items not already in the closet count toward the cap, so re-adding
+    // something you own (e.g. a guest-closet re-sync) never fails at the limit.
+    const [owned, alreadyOwned] = await Promise.all([
+      prisma.digitalWardrobe.count({ where: { userId: user.id } }),
+      prisma.digitalWardrobe.count({ where: { userId: user.id, garmentId: { in: validIds } } }),
+    ]);
+    if (owned + validIds.length - alreadyOwned > MAX_WARDROBE_ITEMS) {
       return NextResponse.json({ error: `Your closet can hold up to ${MAX_WARDROBE_ITEMS} items.` }, { status: 400 });
     }
 

@@ -115,3 +115,52 @@ describe('patterns and leather', () => {
     expect(leatherTone(garment('shoe', [C.white], { name: 'Canvas Sneakers' }))).toBeNull();
   });
 });
+
+describe('outfits with nothing to judge', () => {
+  it('does not invent color or compatibility scores for a single piece', () => {
+    const r = scoreOutfit([byId('white-dress-shirt')], {}, noRules);
+    expect(r.scorable).toBe(false);
+    expect(r.dimensions.colorHarmony.applied).toBe(false);
+    expect(r.dimensions.garmentCompatibility.applied).toBe(false);
+    expect(r.totalScore).toBe(0);
+  });
+
+  it('scores an empty list as 0, not NaN, even with context', () => {
+    const r = scoreOutfit([], { occasion: occasions.businessFormal, season: seasons.winter }, noRules);
+    expect(r.scorable).toBe(false);
+    expect(r.totalScore).toBe(0);
+    expect(Number.isNaN(r.totalScore)).toBe(false);
+  });
+
+  it('marks accessories that do not interact as unscorable', () => {
+    const r = scoreOutfit([byId('navy-tie'), byId('black-belt')], {}, noRules);
+    expect(r.scorable).toBe(false);
+    expect(r.highlights).toEqual([]);
+  });
+
+  it('judges a watch against the shirt instead of ignoring it', () => {
+    const watch = garment('watch', [C.black], { name: 'Black Watch' });
+    const r = scoreOutfit([byId('white-dress-shirt'), watch], {}, noRules);
+    expect(r.scorable).toBe(true);
+    expect(r.dimensions.colorHarmony.applied).toBe(true);
+  });
+
+  it('only renormalizes over the context dimensions when pieces cannot be paired', () => {
+    const r = scoreOutfit([byId('white-dress-shirt')], { occasion: occasions.businessFormal }, noRules);
+    expect(r.scorable).toBe(false);
+    expect(r.dimensions.occasionMatch.applied).toBe(true);
+    expect(r.totalScore).toBeGreaterThan(0);
+  });
+});
+
+describe('notes agree with the scores', () => {
+  it('does not praise colors that the three-color penalty marked down', () => {
+    const r = scoreOutfit(
+      [garment('shirt', [C.red]), garment('trouser', [C.green]), garment('shoe', [C.royalBlue])],
+      {},
+      noRules
+    );
+    expect(r.highlights).not.toContain('The colors work together cleanly.');
+    expect(r.dimensions.colorHarmony.note).toMatch(/color families compete/);
+  });
+});

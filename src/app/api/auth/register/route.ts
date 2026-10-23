@@ -1,9 +1,12 @@
 import { prisma } from '@/lib/prisma';
-import { createUserToken, USER_COOKIE_NAME } from '@/lib/auth';
+import { createUserToken, findUserByEmail, USER_COOKIE_NAME } from '@/lib/auth';
 import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import { registerSchema } from '@/lib/validation';
 import { enforceRateLimits, getClientIp } from '@/lib/rate-limit';
+import { prismaErrorCode } from '@/lib/api-errors';
+
+const EMAIL_TAKEN = 'An account with this email already exists. Try signing in instead.';
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,26 +19,33 @@ export async function POST(request: NextRequest) {
     );
     if (limited) return limited;
 
-    const body = await request.json();
+    const body = await request.json().catch(() => null);
     const parsed = registerSchema.safeParse(body);
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
     }
     const { name, email, password } = parsed.data;
 
-    const existing = await prisma.user.findUnique({ where: { email } });
+    const existing = await findUserByEmail(email);
     if (existing) {
-      return NextResponse.json({ error: 'An account with this email already exists. Try signing in instead.' }, { status: 409 });
+      return NextResponse.json({ error: EMAIL_TAKEN }, { status: 409 });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: {
-        name: name || email.split('@')[0],
-        email,
-        password: hashedPassword,
-      },
-    });
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          name: name || email.split('@')[0],
+          email,
+          password: hashedPassword,
+        },
+      });
+    } catch (error) {
+      // Two sign-ups for the same email racing past the check above.
+      if (prismaErrorCode(error) === 'P2002') return NextResponse.json({ error: EMAIL_TAKEN }, { status: 409 });
+      throw error;
+    }
 
     const token = await createUserToken({
       id: user.id,

@@ -1,13 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Card, CardTitle } from '@/components/ui/card';
+import { SelectableCard } from '@/components/ui/selectable-card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { GarmentIllustration } from '@/components/garment-illustration';
 import Link from 'next/link';
 import { AuthModal } from '@/components/auth-modal';
-import { loadStyleProfile } from '@/lib/style-profile';
+import { loadStyleProfile, type SavedStyleProfile } from '@/lib/style-profile';
 import { OutfitActions } from '@/components/outfit-actions';
 import { Sparkles, RotateCcw, Briefcase, Coffee, Heart, PartyPopper, Bookmark, Check } from 'lucide-react';
 
@@ -17,6 +18,8 @@ interface QuickPickItem {
   slug?: string;
   typeSlug?: string;
   colors: { name: string; hex: string }[];
+  /** The person's own custom garment — it has no encyclopedia page. */
+  isOwn?: boolean;
 }
 
 interface QuickPickOutfit {
@@ -26,6 +29,8 @@ interface QuickPickOutfit {
   shoe: QuickPickItem;
   layer: QuickPickItem | null;
   belt: QuickPickItem | null;
+  /** Locked accessories other than the belt; may be missing. */
+  accessories?: QuickPickItem[];
   highlights: string[];
 }
 
@@ -37,7 +42,37 @@ function outfitPieces(o: QuickPickOutfit) {
     { category: 'trouser', item: o.trouser },
     { category: 'shoe', item: o.shoe },
     o.belt && { category: 'belt', item: o.belt },
+    ...(o.accessories ?? []).map((a) => ({ category: a.typeSlug || 'accessory', item: a })),
   ].filter((p): p is { category: string; item: QuickPickItem } => !!p);
+}
+
+const PROFILE_KEYS: (keyof SavedStyleProfile)[] = [
+  'hairColor',
+  'eyeColor',
+  'skinTone',
+  'underTone',
+  'torsoLength',
+  'bodyProportion',
+];
+
+// The saved profile with only known, non-empty keys in a fixed order, so the
+// same profile always produces the same request (and server cache key).
+function normalizedProfile(): SavedStyleProfile | undefined {
+  const raw = loadStyleProfile();
+  if (!raw) return undefined;
+  const out: SavedStyleProfile = {};
+  for (const key of PROFILE_KEYS) {
+    const v = raw[key];
+    if (typeof v === 'string' && v.trim()) out[key] = v.trim();
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// Today's date in the person's own timezone (YYYY-MM-DD), not UTC.
+function localDate() {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 // Maps a plain "what are you doing today" question directly to a real
@@ -58,10 +93,24 @@ export default function QuickPickPage() {
   const [outfits, setOutfits] = useState<QuickPickOutfit[] | null>(null);
   const [savedIndexes, setSavedIndexes] = useState<number[]>([]);
   const [savingIndex, setSavingIndex] = useState<number | null>(null);
+  const [saveErrors, setSaveErrors] = useState<Record<number, string>>({});
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  // The save that was interrupted by the login prompt, retried after sign-in.
+  const pendingSaveRef = useRef<number | null>(null);
+  // Only the latest pick's response is shown.
+  const requestIdRef = useRef(0);
+
+  const setSaveError = (index: number, message: string | null) =>
+    setSaveErrors((prev) => {
+      const next = { ...prev };
+      if (message) next[index] = message;
+      else delete next[index];
+      return next;
+    });
 
   const saveOutfit = async (outfit: QuickPickOutfit, index: number) => {
     setSavingIndex(index);
+    setSaveError(index, null);
     try {
       const res = await fetch('/api/user/outfits', {
         method: 'POST',
@@ -71,51 +120,71 @@ export default function QuickPickPage() {
           garmentIds: outfitPieces(outfit).map((p) => p.item.id),
           // Same context as the shown score; the server recomputes it.
           occasionSlug: occasionSlug ?? undefined,
-          profile: loadStyleProfile() ?? undefined,
+          profile: normalizedProfile(),
         }),
       });
 
       if (res.status === 401) {
+        pendingSaveRef.current = index;
         setAuthModalOpen(true);
         return;
       }
 
       if (res.ok) {
         setSavedIndexes((prev) => [...prev, index]);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setSaveError(index, data.error || 'Could not save this outfit — please try again.');
       }
     } catch (err) {
       console.error(err);
+      setSaveError(index, 'Could not save this outfit — check your connection and try again.');
     } finally {
       setSavingIndex(null);
     }
   };
 
+  // Saved/error marks are per result index, so they never carry over to new results.
+  const clearSaveState = () => {
+    setSavedIndexes([]);
+    setSaveErrors({});
+    pendingSaveRef.current = null;
+  };
+
   const pick = async (slug: string, label: string) => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(null);
     setOutfits(null);
+    clearSaveState();
     setOccasionLabel(label);
     setOccasionSlug(slug);
     try {
       const res = await fetch('/api/outfit/quick-pick', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ occasionSlug: slug, profile: loadStyleProfile() ?? undefined }),
+        body: JSON.stringify({ occasionSlug: slug, profile: normalizedProfile(), localDate: localDate() }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (requestId !== requestIdRef.current) return;
       if (!res.ok) {
         setError(data.error || 'Something went wrong.');
       } else {
-        setOutfits(data.outfits);
+        clearSaveState();
+        setOutfits(data.outfits ?? []);
       }
     } catch {
+      if (requestId !== requestIdRef.current) return;
       setError('Something went wrong — try again.');
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   };
 
   const reset = () => {
+    requestIdRef.current++;
+    setLoading(false);
+    clearSaveState();
     setOutfits(null);
     setError(null);
     setOccasionLabel(null);
@@ -141,15 +210,16 @@ export default function QuickPickPage() {
         {!outfits && !loading && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {OCCASIONS.map((occ) => (
-              <Card
+              <SelectableCard
                 key={occ.slug}
-                onClick={() => pick(occ.slug, occ.label)}
-                className="cursor-pointer hover:border-amber-500 hover:shadow-xl transition-all p-6 text-center bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800"
+                selected={occasionSlug === occ.slug}
+                onSelect={() => pick(occ.slug, occ.label)}
+                className="hover:border-amber-500 hover:shadow-xl transition-all p-6 text-center bg-white dark:bg-zinc-900 border-slate-200 dark:border-zinc-800"
               >
                 <occ.icon className="w-8 h-8 text-amber-600 dark:text-amber-400 mx-auto mb-3" />
                 <CardTitle className="text-base text-slate-900 dark:text-white mb-1">{occ.label}</CardTitle>
                 <p className="text-xs text-slate-500 dark:text-zinc-400">{occ.description}</p>
-              </Card>
+              </SelectableCard>
             ))}
           </div>
         )}
@@ -204,21 +274,35 @@ export default function QuickPickPage() {
                     </Badge>
                   </div>
                   <div className="flex flex-wrap gap-4">
-                    {outfitPieces(outfit).map(({ category, item }) => (
-                      <Link
-                        key={item.id}
-                        href={item.slug ? `/encyclopedia/${item.slug}` : '/encyclopedia'}
-                        className="flex items-center gap-3 bg-slate-50 dark:bg-zinc-800/60 rounded-xl p-3 flex-1 min-w-[10rem] hover:ring-2 hover:ring-amber-500/30 transition-all group"
-                      >
-                        <GarmentIllustration category={category} colors={item.colors} size={40} />
-                        <div>
-                          <span className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors block">
-                            {item.name}
-                          </span>
-                          <span className="text-[10px] text-slate-400 dark:text-zinc-500">View details →</span>
+                    {outfitPieces(outfit).map(({ category, item }) =>
+                      // The person's own garments have no encyclopedia page.
+                      item.isOwn ? (
+                        <div
+                          key={item.id}
+                          className="flex items-center gap-3 bg-slate-50 dark:bg-zinc-800/60 rounded-xl p-3 flex-1 min-w-[10rem]"
+                        >
+                          <GarmentIllustration category={category} colors={item.colors} size={40} />
+                          <div>
+                            <span className="text-sm font-bold text-slate-900 dark:text-white block">{item.name}</span>
+                            <span className="text-[10px] text-slate-400 dark:text-zinc-500">From your closet</span>
+                          </div>
                         </div>
-                      </Link>
-                    ))}
+                      ) : (
+                        <Link
+                          key={item.id}
+                          href={item.slug ? `/encyclopedia/${item.slug}` : '/encyclopedia'}
+                          className="flex items-center gap-3 bg-slate-50 dark:bg-zinc-800/60 rounded-xl p-3 flex-1 min-w-[10rem] hover:ring-2 hover:ring-amber-500/30 transition-all group"
+                        >
+                          <GarmentIllustration category={category} colors={item.colors} size={40} />
+                          <div>
+                            <span className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors block">
+                              {item.name}
+                            </span>
+                            <span className="text-[10px] text-slate-400 dark:text-zinc-500">View details →</span>
+                          </div>
+                        </Link>
+                      )
+                    )}
                   </div>
 
                   {outfit.highlights?.[0] && (
@@ -231,7 +315,12 @@ export default function QuickPickPage() {
                     onRequireLogin={() => setAuthModalOpen(true)}
                   />
 
-                  <div className="flex justify-end pt-2 border-t border-slate-100 dark:border-zinc-800">
+                  <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100 dark:border-zinc-800">
+                    {saveErrors[i] && (
+                      <p role="alert" className="text-xs font-medium text-rose-600 dark:text-rose-400">
+                        {saveErrors[i]}
+                      </p>
+                    )}
                     <Button
                       variant={isSaved ? 'outline' : 'default'}
                       size="sm"
@@ -264,8 +353,12 @@ export default function QuickPickPage() {
         onClose={() => setAuthModalOpen(false)}
         onSuccess={() => {
           setAuthModalOpen(false);
-          if (savingIndex !== null && outfits && outfits[savingIndex]) {
-            saveOutfit(outfits[savingIndex], savingIndex);
+          // Now signed in: retry the save that asked for login. (The session
+          // cookie is set, so the request re-checks auth on the server.)
+          const index = pendingSaveRef.current;
+          pendingSaveRef.current = null;
+          if (index !== null && outfits && outfits[index]) {
+            void saveOutfit(outfits[index], index);
           }
         }}
       />
