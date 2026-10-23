@@ -15,7 +15,8 @@
     "db:seed": "prisma db seed",
     "db:setup": "prisma migrate deploy && prisma db seed",
     "db:export": "tsx --env-file-if-exists=.env prisma/export-catalog.ts",
-    "admin:set-password": "tsx --env-file-if-exists=.env prisma/set-admin-password.ts"
+    "admin:set-password": "tsx --env-file-if-exists=.env prisma/set-admin-password.ts",
+    "postinstall": "prisma generate"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
