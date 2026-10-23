@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, Palette, Shirt, Sparkles, Layers, Mail } from 'lucide-react';
+import { BookOpen, Palette, Shirt, Sparkles, Layers, Mail, User } from 'lucide-react';
 
 export function Footer() {
   return (
@@ -68,10 +68,18 @@ export function Footer() {
           <div>
             <h4 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider mb-4">Connect</h4>
             <ul className="space-y-2">
+              <li className="text-xs text-zinc-600 uppercase tracking-wider">Developer</li>
+              <li className="flex items-center gap-2 text-sm text-zinc-400">
+                <User className="w-3.5 h-3.5" />
+                Vemesh Bypureddi
+              </li>
               <li>
-                <a href="mailto:hello@styleiq.com" className="flex items-center gap-2 text-sm text-zinc-500 hover:text-amber-400 transition-colors">
-                  <Mail className="w-3.5 h-3.5" />
-                  hello@styleiq.com
+                <a
+                  href="mailto:vemeshbypureddi1204@gmail.com"
+                  className="flex items-center gap-2 text-sm text-zinc-500 hover:text-amber-400 transition-colors break-all"
+                >
+                  <Mail className="w-3.5 h-3.5 shrink-0" />
+                  vemeshbypureddi1204@gmail.com
                 </a>
               </li>
             </ul>
@@ -81,7 +89,7 @@ export function Footer() {
         {/* Bottom */}
         <div className="mt-12 pt-8 border-t border-zinc-800/50 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-xs text-zinc-600">
-            © {new Date().getFullYear()} StyleIQ. Knowledge-driven fashion for men.
+            © {new Date().getFullYear()} StyleIQ. Knowledge-driven fashion for men. Built by Vemesh Bypureddi.
           </p>
           <p className="text-xs text-zinc-700">
             Expert-curated • No AI • Structured knowledge
