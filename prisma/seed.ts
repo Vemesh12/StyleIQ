@@ -101,18 +101,23 @@ async function seedAdmin() {
   if (!provided) console.log(`  Generated admin password (shown once, store it now): ${password}`);
 }
 
+// Remote databases (e.g. Neon) add a network round trip to every query, so the
+// seed avoids long interactive transactions (Prisma closes them after a
+// timeout): writes are batched with createMany / deleteMany where possible,
+// and per-row updates go in array transactions, which have no such timeout.
+
 async function seedReferenceData(c: Catalog) {
-  await prisma.$transaction(async (tx) => {
-    for (const t of c.garmentTypes) await tx.garmentType.upsert({ where: { slug: t.slug }, update: t, create: t });
-    for (const x of c.colors) await tx.color.upsert({ where: { slug: x.slug }, update: x, create: x });
-    for (const x of c.fits) await tx.fit.upsert({ where: { slug: x.slug }, update: x, create: x });
-    for (const x of c.materials) await tx.material.upsert({ where: { slug: x.slug }, update: x, create: x });
-    for (const x of c.patterns) await tx.pattern.upsert({ where: { slug: x.slug }, update: x, create: x });
-    for (const x of c.occasions) await tx.occasion.upsert({ where: { slug: x.slug }, update: x, create: x });
-    for (const x of c.seasons) await tx.season.upsert({ where: { slug: x.slug }, update: x, create: x });
-    for (const x of c.bodyTypes) await tx.bodyType.upsert({ where: { slug: x.slug }, update: x, create: x });
-    for (const x of c.skinTones) await tx.skinTone.upsert({ where: { slug: x.slug }, update: x, create: x });
-  }, { timeout: 120_000 });
+  await prisma.$transaction([
+    ...c.garmentTypes.map((t) => prisma.garmentType.upsert({ where: { slug: t.slug }, update: t, create: t })),
+    ...c.colors.map((x) => prisma.color.upsert({ where: { slug: x.slug }, update: x, create: x })),
+    ...c.fits.map((x) => prisma.fit.upsert({ where: { slug: x.slug }, update: x, create: x })),
+    ...c.materials.map((x) => prisma.material.upsert({ where: { slug: x.slug }, update: x, create: x })),
+    ...c.patterns.map((x) => prisma.pattern.upsert({ where: { slug: x.slug }, update: x, create: x })),
+    ...c.occasions.map((x) => prisma.occasion.upsert({ where: { slug: x.slug }, update: x, create: x })),
+    ...c.seasons.map((x) => prisma.season.upsert({ where: { slug: x.slug }, update: x, create: x })),
+    ...c.bodyTypes.map((x) => prisma.bodyType.upsert({ where: { slug: x.slug }, update: x, create: x })),
+    ...c.skinTones.map((x) => prisma.skinTone.upsert({ where: { slug: x.slug }, update: x, create: x })),
+  ]);
   console.log(`Reference data: ${c.garmentTypes.length} types, ${c.colors.length} colors, ${c.occasions.length} occasions, ${c.seasons.length} seasons.`);
 }
 
@@ -134,36 +139,45 @@ async function seedGarments(c: Catalog) {
   const occasionId = idMap(occasions, 'occasion');
   const seasonId = idMap(seasons, 'season');
 
-  await prisma.$transaction(async (tx) => {
-    for (const g of c.garments) {
-      const fields = {
-        name: g.name,
-        garmentTypeId: typeId(g.type),
-        formalityLevel: g.formalityLevel,
-        description: g.description,
-        imageUrl: g.imageUrl,
-      };
-      const { id } = await tx.garment.upsert({ where: { slug: g.slug }, update: fields, create: { slug: g.slug, ...fields } });
+  type G = Catalog['garments'][number];
+  const fieldsOf = (g: G) => ({
+    name: g.name,
+    garmentTypeId: typeId(g.type),
+    formalityLevel: g.formalityLevel,
+    description: g.description,
+    imageUrl: g.imageUrl,
+  });
+  const slugs = c.garments.map((g) => g.slug);
 
-      // Attribute rows are replaced wholesale so the garment matches the file exactly.
-      await tx.garmentColor.deleteMany({ where: { garmentId: id } });
-      await tx.garmentFit.deleteMany({ where: { garmentId: id } });
-      await tx.garmentMaterial.deleteMany({ where: { garmentId: id } });
-      await tx.garmentPattern.deleteMany({ where: { garmentId: id } });
-      await tx.garmentOccasion.deleteMany({ where: { garmentId: id } });
-      await tx.garmentSeason.deleteMany({ where: { garmentId: id } });
-      await tx.garmentColor.createMany({ data: g.colors.map((x) => ({ garmentId: id, colorId: colorId(x.slug), isPrimary: x.isPrimary })) });
-      await tx.garmentFit.createMany({ data: g.fits.map((x) => ({ garmentId: id, fitId: fitId(x.slug), isPrimary: x.isPrimary })) });
-      await tx.garmentMaterial.createMany({ data: g.materials.map((x) => ({ garmentId: id, materialId: materialId(x.slug), percentage: x.percentage })) });
-      await tx.garmentPattern.createMany({ data: g.patterns.map((x) => ({ garmentId: id, patternId: patternId(x.slug), isPrimary: x.isPrimary })) });
-      await tx.garmentOccasion.createMany({
-        data: Object.entries(g.occasions).map(([slug, suitability]) => ({ garmentId: id, occasionId: occasionId(slug), suitability })),
-      });
-      await tx.garmentSeason.createMany({
-        data: Object.entries(g.seasons).map(([slug, suitability]) => ({ garmentId: id, seasonId: seasonId(slug), suitability })),
-      });
-    }
-  }, { timeout: 300_000 });
+  // 1. The garments themselves: new ones in one statement, the rest updated.
+  const existing = new Set((await prisma.garment.findMany({ where: { slug: { in: slugs } }, select: { slug: true } })).map((g) => g.slug));
+  await prisma.$transaction([
+    prisma.garment.createMany({ data: c.garments.filter((g) => !existing.has(g.slug)).map((g) => ({ slug: g.slug, ...fieldsOf(g) })) }),
+    ...c.garments.filter((g) => existing.has(g.slug)).map((g) => prisma.garment.update({ where: { slug: g.slug }, data: fieldsOf(g) })),
+  ]);
+
+  // 2. Attribute rows are replaced wholesale so every garment matches the file exactly.
+  const garmentId = idMap(await prisma.garment.findMany({ where: { slug: { in: slugs } }, select: { id: true, slug: true } }), 'garment');
+  const rows = <T,>(f: (g: G, id: string) => T[]) => c.garments.flatMap((g) => f(g, garmentId(g.slug)));
+  const where = { garmentId: { in: slugs.map(garmentId) } };
+  await prisma.$transaction([
+    prisma.garmentColor.deleteMany({ where }),
+    prisma.garmentFit.deleteMany({ where }),
+    prisma.garmentMaterial.deleteMany({ where }),
+    prisma.garmentPattern.deleteMany({ where }),
+    prisma.garmentOccasion.deleteMany({ where }),
+    prisma.garmentSeason.deleteMany({ where }),
+    prisma.garmentColor.createMany({ data: rows((g, id) => g.colors.map((x) => ({ garmentId: id, colorId: colorId(x.slug), isPrimary: x.isPrimary }))) }),
+    prisma.garmentFit.createMany({ data: rows((g, id) => g.fits.map((x) => ({ garmentId: id, fitId: fitId(x.slug), isPrimary: x.isPrimary }))) }),
+    prisma.garmentMaterial.createMany({ data: rows((g, id) => g.materials.map((x) => ({ garmentId: id, materialId: materialId(x.slug), percentage: x.percentage }))) }),
+    prisma.garmentPattern.createMany({ data: rows((g, id) => g.patterns.map((x) => ({ garmentId: id, patternId: patternId(x.slug), isPrimary: x.isPrimary }))) }),
+    prisma.garmentOccasion.createMany({
+      data: rows((g, id) => Object.entries(g.occasions).map(([slug, suitability]) => ({ garmentId: id, occasionId: occasionId(slug), suitability }))),
+    }),
+    prisma.garmentSeason.createMany({
+      data: rows((g, id) => Object.entries(g.seasons).map(([slug, suitability]) => ({ garmentId: id, seasonId: seasonId(slug), suitability }))),
+    }),
+  ]);
   console.log(`Garments: ${c.garments.length} upserted with colors, fits, materials, patterns, occasions and seasons.`);
 }
 
@@ -171,35 +185,45 @@ async function seedRules(c: Catalog) {
   const garmentId = idMap(await prisma.garment.findMany({ select: { id: true, slug: true } }), 'garment');
   const colorId = idMap(await prisma.color.findMany({ select: { id: true, slug: true } }), 'color');
 
-  await prisma.$transaction(async (tx) => {
-    // One rule per unordered pair: update whichever direction exists.
-    for (const r of c.compatibilityRules) {
+  // One rule per unordered pair: update whichever direction exists.
+  const pairKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+  const garmentRules = new Map(
+    (await prisma.compatibilityRule.findMany({ select: { id: true, garmentAId: true, garmentBId: true } })).map((r) => [pairKey(r.garmentAId, r.garmentBId), r.id])
+  );
+  const colorRules = new Map(
+    (await prisma.colorCompatibilityRule.findMany({ select: { id: true, colorAId: true, colorBId: true } })).map((r) => [pairKey(r.colorAId, r.colorBId), r.id])
+  );
+
+  await prisma.$transaction([
+    ...c.compatibilityRules.map((r) => {
       const [a, b] = [garmentId(r.a), garmentId(r.b)];
       const data = { rating: r.rating, reason: r.reason, compatibilityType: compatibilityTypeForRating(r.rating) };
-      const existing = await tx.compatibilityRule.findFirst({ where: { OR: [{ garmentAId: a, garmentBId: b }, { garmentAId: b, garmentBId: a }] } });
-      if (existing) await tx.compatibilityRule.update({ where: { id: existing.id }, data });
-      else await tx.compatibilityRule.create({ data: { garmentAId: a, garmentBId: b, ...data } });
-    }
-    for (const r of c.colorRules) {
+      const id = garmentRules.get(pairKey(a, b));
+      return id
+        ? prisma.compatibilityRule.update({ where: { id }, data })
+        : prisma.compatibilityRule.create({ data: { garmentAId: a, garmentBId: b, ...data } });
+    }),
+    ...c.colorRules.map((r) => {
       const [a, b] = [colorId(r.a), colorId(r.b)];
       const data = { score: r.score, harmony: r.harmony, ruleType: r.ruleType, reason: r.reason };
-      const existing = await tx.colorCompatibilityRule.findFirst({ where: { OR: [{ colorAId: a, colorBId: b }, { colorAId: b, colorBId: a }] } });
-      if (existing) await tx.colorCompatibilityRule.update({ where: { id: existing.id }, data });
-      else await tx.colorCompatibilityRule.create({ data: { colorAId: a, colorBId: b, ...data } });
-    }
-  }, { timeout: 120_000 });
+      const id = colorRules.get(pairKey(a, b));
+      return id
+        ? prisma.colorCompatibilityRule.update({ where: { id }, data })
+        : prisma.colorCompatibilityRule.create({ data: { colorAId: a, colorBId: b, ...data } });
+    }),
+  ]);
   console.log(`Curated rules: ${c.compatibilityRules.length} garment pairs, ${c.colorRules.length} color pairs.`);
 }
 
 async function seedContent(c: Catalog) {
-  await prisma.$transaction(async (tx) => {
-    for (const g of c.guides) await tx.guide.upsert({ where: { slug: g.slug }, update: g, create: g });
-    for (const r of c.styleRules) {
-      const existing = await tx.styleRule.findFirst({ where: { title: r.title } });
-      if (existing) await tx.styleRule.update({ where: { id: existing.id }, data: r });
-      else await tx.styleRule.create({ data: r });
-    }
-  });
+  const ruleIds = new Map((await prisma.styleRule.findMany({ select: { id: true, title: true } })).map((r) => [r.title, r.id]));
+  await prisma.$transaction([
+    ...c.guides.map((g) => prisma.guide.upsert({ where: { slug: g.slug }, update: g, create: g })),
+    ...c.styleRules.map((r) => {
+      const id = ruleIds.get(r.title);
+      return id ? prisma.styleRule.update({ where: { id }, data: r }) : prisma.styleRule.create({ data: r });
+    }),
+  ]);
   console.log(`Content: ${c.guides.length} guides, ${c.styleRules.length} style rules.`);
 }
 
@@ -240,12 +264,9 @@ async function seedPersonalization(d: PersonalizationData) {
 
   // Replace atomically: a failure part-way leaves the previous rows intact
   // (the old CSV import deleted everything first, outside a transaction).
-  await prisma.$transaction(async (tx) => {
-    await tx.personalizationRule.deleteMany();
-    for (let i = 0; i < rows.length; i += 2000) {
-      await tx.personalizationRule.createMany({ data: rows.slice(i, i + 2000) });
-    }
-  }, { timeout: 300_000 });
+  const chunks: Prisma.PersonalizationRuleCreateManyInput[][] = [];
+  for (let i = 0; i < rows.length; i += 2000) chunks.push(rows.slice(i, i + 2000));
+  await prisma.$transaction([prisma.personalizationRule.deleteMany(), ...chunks.map((data) => prisma.personalizationRule.createMany({ data }))]);
   console.log(`Personalization: ${rows.length} rows generated.`);
 }
 
